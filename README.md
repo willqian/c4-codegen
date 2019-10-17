@@ -1,4 +1,4 @@
-c4 - C in four functions
+c4 - C in four functions 中文注释版
 ========================
 
 An exercise in minimalism.
