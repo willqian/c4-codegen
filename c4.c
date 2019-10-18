@@ -19,6 +19,7 @@ char *p, *lp, // current position in source code
 int *e, *le,  // current position in emitted code
     *id,      // currently parsed identifier
     *sym,     // symbol table (simple list of identifiers)
+    *stt,     // struct meta 结构体元数据定义
     tk,       // current token
     ival,     // current token value
     ty,       // current expression type
@@ -27,11 +28,21 @@ int *e, *le,  // current position in emitted code
     src,      // print source and assembly flag
     debug;    // print executed instructions
 
+// v1: 先只支持简单结构体定义，不支持结构体嵌套定义
+struct stt_meta {
+  char *id;         // 结构体名称，指向data段
+  int *sym;         // 结构体成员定义，与sym symbol table一样定义
+  int *sym_offset;  // 结构体成员偏移
+  int *sym_size;    // 结构体成员占用size
+  int sym_num;      // 结构体成员个数
+  int size;         // 结构体占用size
+};
+
 // tokens and classes (operators last and in precedence order)
 enum {
   Num = 128, Fun, Sys, Glo, Loc, Id,
-  Char, Else, Enum, If, Int, Return, Sizeof, While,
-  Assign, Cond, Lor, Lan, Or, Xor, And, Eq, Ne, Lt, Gt, Le, Ge, Shl, Shr, Add, Sub, Mul, Div, Mod, Inc, Dec, Brak
+  Char, Else, Enum, If, Int, Struct, Return, Sizeof, While,
+  Assign, Cond, Lor, Lan, Or, Xor, And, Eq, Ne, Lt, Gt, Le, Ge, Shl, Shr, Add, Sub, Mul, Div, Dot, Arrow, Mod, Inc, Dec, Brak,
 };
 
 // opcodes
@@ -41,6 +52,8 @@ enum { LEA ,IMM ,JMP ,JSR ,BZ  ,BNZ ,ENT ,ADJ ,LEV ,LI  ,LC  ,SI  ,SC  ,PSH ,
 
 // types
 enum { CHAR, INT, PTR };
+
+enum { STRUCT = -1 };
 
 // identifier offsets (since we can't create an ident struct)
 enum { Tk, Hash, Name, Class, Type, Val, HClass, HType, HVal, Idsz };
@@ -425,13 +438,15 @@ int main(int argc, char **argv)
   if (!(le = e = malloc(poolsz))) { printf("could not malloc(%d) text area\n", poolsz); return -1; }
   if (!(data = malloc(poolsz))) { printf("could not malloc(%d) data area\n", poolsz); return -1; }
   if (!(sp = malloc(poolsz))) { printf("could not malloc(%d) stack area\n", poolsz); return -1; }
+  if (!(stt = malloc(poolsz))) { printf("could not malloc(%d) struct meta area\n", poolsz); return -1; }
 
   memset(sym,  0, poolsz);
   memset(e,    0, poolsz);
   memset(data, 0, poolsz);
+  memset(stt,  0, poolsz);
 
   // 先把这些特殊符号加到id table上，最后一个是main，程序从main开始运行
-  p = "char else enum if int return sizeof while "
+  p = "char else enum if int struct return sizeof while "
       "open read close printf malloc free memset memcmp exit void main";
   i = Char; while (i <= While) { next(); id[Tk] = i++; } // add keywords to symbol table
   i = OPEN; while (i <= EXIT) { next(); id[Class] = Sys; id[Type] = INT; id[Val] = i++; } // add library to symbol table
@@ -470,6 +485,9 @@ int main(int argc, char **argv)
         }
         next();
       }
+    }
+    else if (tk == Struct) { // 处理 Struct 定义
+      next(); bt = STRUCT;
     }
     while (tk != ';' && tk != '}') {
       ty = bt;
@@ -530,6 +548,9 @@ int main(int argc, char **argv)
           id = id + Idsz;
         }
       }
+      else if (tk == '{') { // 结构体定义
+        id[Class] = Struct;
+      } 
       else { // 全局变量
         id[Class] = Glo;
         id[Val] = (int)data;
