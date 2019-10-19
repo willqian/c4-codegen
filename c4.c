@@ -19,7 +19,6 @@ char *p, *lp, // current position in source code
 int *e, *le,  // current position in emitted code
     *id,      // currently parsed identifier
     *sym,     // symbol table (simple list of identifiers)
-    *stt,     // struct meta 结构体元数据定义
     tk,       // current token
     ival,     // current token value
     ty,       // current expression type
@@ -28,15 +27,22 @@ int *e, *le,  // current position in emitted code
     src,      // print source and assembly flag
     debug;    // print executed instructions
 
-// v1: 先只支持简单结构体定义，不支持结构体嵌套定义
-struct stt_meta {
-  char *id;         // 结构体名称，指向data段
-  int *sym;         // 结构体成员定义，与sym symbol table一样定义
-  int *sym_offset;  // 结构体成员偏移
-  int *sym_size;    // 结构体成员占用size
-  int sym_num;      // 结构体成员个数
-  int size;         // 结构体占用size
+struct stt_meta_id {
+  int *id;          // 结构体成员定义，指向ident struct
+  int id_offset;    // 结构体成员内存偏移
+  int id_size;      // 结构体成员内存占用
+  int id_type;      // 结构体成员type
+  struct stt_meta_id *next;
 };
+
+// v1: 先只支持简单结构体定义，不支持结构体嵌套定义
+// 结构体嵌套定义也就只需要在ident struct上通过STMetaType字段做索引即可
+struct stt_meta {
+  struct stt_meta_id *ids;
+  int id_num;       // 结构体成员个数
+  int size;         // 结构体总内存占用
+  int defined;      // 结构体是否定义过
+} *stt_metas; // 结构体元数据数组
 
 // tokens and classes (operators last and in precedence order)
 enum {
@@ -51,12 +57,13 @@ enum { LEA ,IMM ,JMP ,JSR ,BZ  ,BNZ ,ENT ,ADJ ,LEV ,LI  ,LC  ,SI  ,SC  ,PSH ,
        OPEN,READ,CLOS,PRTF,MALC,FREE,MSET,MCMP,EXIT };
 
 // types
-enum { CHAR, INT, PTR };
-
-enum { STRUCT = -1 };
+enum { CHAR, INT, STRUCT_BEGIN, PTR = 1024 }; // struct排列在INT后，最多定义到1023，后面是一级指针和二级指针
 
 // identifier offsets (since we can't create an ident struct)
-enum { Tk, Hash, Name, Class, Type, Val, HClass, HType, HVal, Idsz };
+// 这个数据结构本身定义symbol，这里我们也复用为结构体定义的symbol
+// 比如 struct member {...}; 又有 int member，那么这两个同名但类型不同，所以需要加一个STMetaType字段，表示这个symbol也是结构体meta定义
+// 另外 struct 成员变量其实也会在这里复用，暂时先不处理
+enum { Tk, Hash, Name, Class, Type, Val, STMetaType, HClass, HType, HVal, Idsz };
 
 void next()
 {
@@ -424,7 +431,12 @@ int main(int argc, char **argv)
 {
   int fd, bt, ty, poolsz, *idmain;
   int *pc, *sp, *bp, a, cycle; // vm registers
-  int i, *t; // temps
+  int i, j, k, *t; // temps
+  struct stt_meta *stm; // struct meta
+  struct stt_meta_id *stm_id; // struct meta id
+  struct stt_meta_id **cur;
+  int sttotal = PTR;
+  int stindex = STRUCT_BEGIN;
 
   --argc; ++argv;
   if (argc > 0 && **argv == '-' && (*argv)[1] == 's') { src = 1; --argc; ++argv; }
@@ -438,12 +450,12 @@ int main(int argc, char **argv)
   if (!(le = e = malloc(poolsz))) { printf("could not malloc(%d) text area\n", poolsz); return -1; }
   if (!(data = malloc(poolsz))) { printf("could not malloc(%d) data area\n", poolsz); return -1; }
   if (!(sp = malloc(poolsz))) { printf("could not malloc(%d) stack area\n", poolsz); return -1; }
-  if (!(stt = malloc(poolsz))) { printf("could not malloc(%d) struct meta area\n", poolsz); return -1; }
+  if (!(stt_metas = malloc(sttotal * sizeof(struct stt_meta)))) { printf("could not malloc(%d) struct meta area\n", poolsz); return -1; }
 
   memset(sym,  0, poolsz);
   memset(e,    0, poolsz);
   memset(data, 0, poolsz);
-  memset(stt,  0, poolsz);
+  memset(stt_metas,  0, sttotal * sizeof(struct stt_meta));
 
   // 先把这些特殊符号加到id table上，最后一个是main，程序从main开始运行
   p = "char else enum if int struct return sizeof while "
@@ -486,8 +498,65 @@ int main(int argc, char **argv)
         next();
       }
     }
-    else if (tk == Struct) { // 处理 Struct 定义
-      next(); bt = STRUCT;
+    else if (tk == Struct) { // 处理 Struct 结构体
+      next();
+      if (tk != Id) { printf("%d: expected struct id, but token %d\n", line, tk); return -1; }
+      next();
+      if (tk == '{') { // 结构体定义
+        // 先判断结构体有没有重复定义
+        if (stt_metas[id[STMetaType]].defined != 0) { printf("%d: struct redefined\n", line); return -1; }
+        id[STMetaType] = stindex;
+        stm = &stt_metas[stindex]; // 获取当前结构体meta
+        stindex++;
+        k = 0; // 成员变量offset
+        cur = &stm->ids;
+        next();
+        while (tk != '}') {
+          // 先判断成员变量类型
+          if (tk == Int) { next(); bt = INT;}
+          else if (tk == Char) { next(); bt = CHAR;}
+          else if (tk == Struct) { // 结构体嵌套定义
+            next();
+            if (tk != Id) { printf("%d: expected struct id, but token %d\n", line, tk); return -1; }
+            // 判断结构体是否定义过
+            if (stt_metas[id[STMetaType]].defined == 0) { printf("%d: struct not defined\n", line); return -1; }
+            bt = id[STMetaType];
+            next();
+          }
+          // 然后处理对应的成员变量
+          while (tk != ';') {
+            ty = bt;
+            while (tk == Mul) { next(); ty = ty + PTR; } // 有*号，是指针，递归进行
+            if (tk != Id) { printf("%d: bad struct member declaration\n", line); return -1; }
+            stm_id = (struct stt_meta_id *)malloc(sizeof(struct stt_meta_id));
+            memset(stm_id, 0, sizeof(struct stt_meta_id));
+            stm_id->id = id;
+            // 这里的int其实是long long，暂时只考虑8字节对齐
+            if (ty == CHAR) { j = 1; }
+            else if (ty >= STRUCT_BEGIN && ty < PTR) {
+              j = stt_metas[bt].size;
+              k = (k + sizeof(int) - 1) & -sizeof(int);
+            }
+            else {
+              j = sizeof(int);
+              k = (k + sizeof(int) - 1) & -sizeof(int);
+            }
+            stm_id->id_offset = k;
+            k += j;
+            stm_id->id_size = j;
+            stm_id->id_type = ty;
+            *cur = stm_id;
+            cur = &((*cur)->next);
+            stm->id_num++;
+            next();
+            if (tk == ',') next();
+          }
+          next();
+        }
+        stm->size = k;
+        stm->defined = 1;
+        next();
+      }
     }
     while (tk != ';' && tk != '}') {
       ty = bt;
@@ -548,9 +617,6 @@ int main(int argc, char **argv)
           id = id + Idsz;
         }
       }
-      else if (tk == '{') { // 结构体定义
-        id[Class] = Struct;
-      } 
       else { // 全局变量
         id[Class] = Glo;
         id[Val] = (int)data;
