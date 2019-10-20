@@ -177,11 +177,21 @@ void expr(int lev)
   else if (tk == Sizeof) { // 支持int char (int *) (char *) (int **) (char **) ... int的长度是64位 long long
     next(); if (tk == '(') next(); else { printf("%d: open paren expected in sizeof\n", line); exit(-1); }
     ty = INT; if (tk == Int) next(); else if (tk == Char) { next(); ty = CHAR; }
+    else if (tk == Struct) { 
+      next(); ty = id[STMetaType]; 
+      if (stt_metas[ty].defined == 0) { printf("%d: struct not defined in sizeof\n", line); exit(-1); }
+      next();
+    }
     while (tk == Mul) { next(); ty = ty + PTR; } // 老派程序设计思想，这里可以很好处理指针递归，例如(int *) (int **)
                                                  // type本身是INT或CHAR，加上PTR分别指代(INT *)和(CHAR *)
                                                  // 如果是(int **)，则type加上两次PTR
     if (tk == ')') next(); else { printf("%d: close paren expected in sizeof\n", line); exit(-1); }
-    *++e = IMM; *++e = (ty == CHAR) ? sizeof(char) : sizeof(int); // int (int *) (char *) ... 作为sizeof(int)处理
+    // int (int *) (char *) ... 作为sizeof(int)处理
+    // 增加结构体的支持
+    if (ty == CHAR) { t = sizeof(char); }
+    else if (ty >= STRUCT_BEGIN && ty < PTR) { t = stt_metas[ty].size; }
+    else { t = sizeof(int); }
+    *++e = IMM; *++e = t;
     ty = INT;
   }
   else if (tk == Id) { // 处理定义的变量和函数
