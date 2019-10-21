@@ -45,10 +45,11 @@ struct stt_meta {
 } *stt_metas; // 结构体元数据数组
 
 // tokens and classes (operators last and in precedence order)
+// 结构体索引成员变量token . 和 -> 优先级最高
 enum {
   Num = 128, Fun, Sys, Glo, Loc, Id,
   Char, Else, Enum, If, Int, Struct, Return, Sizeof, While,
-  Assign, Cond, Lor, Lan, Or, Xor, And, Eq, Ne, Lt, Gt, Le, Ge, Shl, Shr, Add, Sub, Mul, Div, Dot, Arrow, Mod, Inc, Dec, Brak,
+  Assign, Cond, Lor, Lan, Or, Xor, And, Eq, Ne, Lt, Gt, Le, Ge, Shl, Shr, Add, Sub, Mul, Div, Mod, Inc, Dec, Brak, Dot, Arrow,
 };
 
 // opcodes
@@ -133,6 +134,7 @@ void next()
         return;
       }
     }
+    // TODO: 这里最好给字符串尾部加一个'\0'，否则无法通过pp指针获取字符串长度
     else if (tk == '\'' || tk == '"') {
       pp = data;
       while (*p != 0 && *p != tk) {
@@ -147,7 +149,10 @@ void next()
     }
     else if (tk == '=') { if (*p == '=') { ++p; tk = Eq; } else tk = Assign; return; }
     else if (tk == '+') { if (*p == '+') { ++p; tk = Inc; } else tk = Add; return; }
-    else if (tk == '-') { if (*p == '-') { ++p; tk = Dec; } else tk = Sub; return; }
+    else if (tk == '-') {
+      if (*p == '-') { ++p; tk = Dec; } else if (*p == '>') { ++p; tk = Arrow; } else tk = Sub;
+      return;
+    }
     else if (tk == '!') { if (*p == '=') { ++p; tk = Ne; } return; }
     else if (tk == '<') { if (*p == '=') { ++p; tk = Le; } else if (*p == '<') { ++p; tk = Shl; } else tk = Lt; return; }
     else if (tk == '>') { if (*p == '=') { ++p; tk = Ge; } else if (*p == '>') { ++p; tk = Shr; } else tk = Gt; return; }
@@ -165,6 +170,7 @@ void next()
 void expr(int lev)
 {
   int t, *d;
+  struct stt_meta_id *ptr, *mem;
   // e指向的是代码段，当然这里代码段都是存在内存里
   // expr先处理的是表达式的左部分，右部分放在了后面的while(tk >= lev)循环里
   if (!tk) { printf("%d: unexpected eof in expression\n", line); exit(-1); }
@@ -216,6 +222,35 @@ void expr(int lev)
       if (t) { *++e = ADJ; *++e = t; } // 函数调用完毕后，需要出栈 ADJ t，t是参数个数
       ty = d[Type]; 
     }
+    // 处理struct -> arrow符号
+    else if (tk == Arrow) {
+      // 先判断是不是struct *
+      if (d[Type] < (STRUCT_BEGIN + PTR) || d[Type] >= (PTR * 2)) {
+        printf("%d: not struct\n", line); exit(-1);
+      }
+      ty = d[Type] - PTR;
+      // 然后判断->指向的id合不合法
+      next();
+      if (stt_metas[ty].defined == 0) { printf("%d: struct not defined\n", line); exit(-1); }
+      ptr = stt_metas[ty].ids;
+      mem = 0;
+      while (ptr) { 
+        if (ptr->id[Hash] == id[Hash]) { mem = ptr; ptr = 0; }
+        else ptr = ptr->next;
+      }
+      if (mem == 0) { printf("%d: struct has no member\n", line); exit(-1); }
+      next();
+      //最后分别处理Loc或Glo，参考下面else部分的内容
+      if (d[Class] == Loc) { *++e = LEA; *++e = loc - d[Val]; }
+      else if (d[Class] == Glo) { *++e = IMM; *++e = d[Val]; }
+      else { printf("%d: undefined variable\n", line); exit(-1); }
+      // 先获取内存地址的值，也就是指针指向的地址，然后PSH入栈
+      *++e = LI; *++e = PSH; 
+      // 进行offset运算，相加，得到成员变量的地址
+      *++e = IMM; *++e = mem->id_offset; *++e = ADD;
+      // 最后获取成员变量地址的值
+      *++e = ((ty = mem->id_type) == CHAR) ? LC : LI;
+    }
     else if (d[Class] == Num) { *++e = IMM; *++e = d[Val]; ty = INT; } // Enum类型，IMM d[Val] type: INT
                                                                        // 参考main函数的Enum处理部分
     else {
@@ -237,7 +272,16 @@ void expr(int lev)
       expr(Inc); // 递归expr，优先级需要大于等于Inc，也就是处理i++ i--
       ty = t;
     }
-    else { // 直接作为普通的表达式处理
+    else if (tk == Struct) { // 处理struct类型转换
+      next();
+      if (stt_metas[id[STMetaType]].defined == 0) { printf("%d: struct not defined\n", line); exit(-1); }
+      t = id[STMetaType]; next();
+      while (tk == Mul) { next(); t = t + PTR; }
+      if (tk == ')') next(); else { printf("%d: bad cast\n", line); exit(-1); }
+      expr(Inc); // 递归expr，优先级需要大于等于Inc，也就是处理i++ i--
+      ty = t;
+    }
+    else { // 直接作为普通的表达式处理，这个优先级最高，直接运算括号内部expr
       expr(Assign);
       if (tk == ')') next(); else { printf("%d: close paren expected\n", line); exit(-1); }
     }
@@ -439,7 +483,7 @@ void stmt() // 不支持for循环
 
 int main(int argc, char **argv)
 {
-  int fd, bt, ty, poolsz, *idmain;
+  int fd, bt, mem_bt, ty, poolsz, *idmain;
   int *pc, *sp, *bp, a, cycle; // vm registers
   int i, j, k, *t; // temps
   struct stt_meta *stm; // struct meta
@@ -517,25 +561,26 @@ int main(int argc, char **argv)
         if (stt_metas[id[STMetaType]].defined != 0) { printf("%d: struct redefined\n", line); return -1; }
         id[STMetaType] = stindex;
         stm = &stt_metas[stindex]; // 获取当前结构体meta
+        bt = stindex;
         stindex++;
         k = 0; // 成员变量offset
         cur = &stm->ids;
         next();
         while (tk != '}') {
           // 先判断成员变量类型
-          if (tk == Int) { next(); bt = INT;}
-          else if (tk == Char) { next(); bt = CHAR;}
+          if (tk == Int) { next(); mem_bt = INT;}
+          else if (tk == Char) { next(); mem_bt = CHAR;}
           else if (tk == Struct) { // 结构体嵌套定义
             next();
             if (tk != Id) { printf("%d: expected struct id, but token %d\n", line, tk); return -1; }
             // 判断结构体是否定义过
             if (stt_metas[id[STMetaType]].defined == 0) { printf("%d: struct not defined\n", line); return -1; }
-            bt = id[STMetaType];
+            mem_bt = id[STMetaType];
             next();
           }
           // 然后处理对应的成员变量
           while (tk != ';') {
-            ty = bt;
+            ty = mem_bt;
             while (tk == Mul) { next(); ty = ty + PTR; } // 有*号，是指针，递归进行
             if (tk != Id) { printf("%d: bad struct member declaration\n", line); return -1; }
             stm_id = (struct stt_meta_id *)malloc(sizeof(struct stt_meta_id));
@@ -544,7 +589,7 @@ int main(int argc, char **argv)
             // 这里的int其实是long long，暂时只考虑8字节对齐
             if (ty == CHAR) { j = 1; }
             else if (ty >= STRUCT_BEGIN && ty < PTR) {
-              j = stt_metas[bt].size;
+              j = stt_metas[ty].size;
               k = (k + sizeof(int) - 1) & -sizeof(int);
             }
             else {
@@ -566,10 +611,15 @@ int main(int argc, char **argv)
         stm->size = k;
         stm->defined = 1;
         next();
+      } 
+      else { // 已经定义过的 
+        if (stt_metas[id[STMetaType]].defined == 0) { printf("%d: struct not defined\n", line); return -1; }
+        bt = id[STMetaType];
       }
     }
     while (tk != ';' && tk != '}') {
-      ty = bt;
+      ty = bt; // 符号类型，或函数返回值类型
+      // TODO: 处理struct返回值，先只处理指针形式的
       while (tk == Mul) { next(); ty = ty + PTR; } // 有*号，是指针，递归进行
       if (tk != Id) { printf("%d: bad global declaration\n", line); return -1; }
       if (id[Class]) { printf("%d: duplicate global definition\n", line); return -1; }
@@ -583,6 +633,12 @@ int main(int argc, char **argv)
           ty = INT;
           if (tk == Int) next();
           else if (tk == Char) { next(); ty = CHAR; }
+          else if (tk == Struct) { // TODO: 处理struct传参，先只处理指针传参
+            next();
+            if (stt_metas[id[STMetaType]].defined == 0) { printf("%d: struct not defined\n", line); return -1; }
+            ty = id[STMetaType];
+            next();
+          }
           while (tk == Mul) { next(); ty = ty + PTR; }
           if (tk != Id) { printf("%d: bad parameter declaration\n", line); return -1; }
           if (id[Class] == Loc) { printf("%d: duplicate parameter definition\n", line); return -1; }
@@ -609,6 +665,7 @@ int main(int argc, char **argv)
             id[HClass] = id[Class]; id[Class] = Loc;
             id[HType]  = id[Type];  id[Type] = ty;
             id[HVal]   = id[Val];   id[Val] = ++i; // 局部变量从2开始计数
+            // TODO: 待支持struct变量的内存分配，先只处理struct指针类型
             next();
             if (tk == ',') next();
           }
@@ -628,8 +685,9 @@ int main(int argc, char **argv)
         }
       }
       else { // 全局变量
+        // TODO: 待支持struct变量的内存分配，先只处理struct指针类型
         id[Class] = Glo;
-        id[Val] = (int)data;
+        id[Val] = (int)data; // 分配了一个int长度的数据内存
         data = data + sizeof(int);
       }
       if (tk == ',') next();
