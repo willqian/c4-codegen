@@ -163,6 +163,7 @@ void next()
     else if (tk == '*') { tk = Mul; return; }
     else if (tk == '[') { tk = Brak; return; }
     else if (tk == '?') { tk = Cond; return; }
+    else if (tk == '.') { tk = Dot; return; }
     else if (tk == '~' || tk == ';' || tk == '{' || tk == '}' || tk == '(' || tk == ')' || tk == ']' || tk == ',' || tk == ':') return;
   }
 }
@@ -182,15 +183,23 @@ void expr(int lev)
   }
   else if (tk == Sizeof) { // 支持int char (int *) (char *) (int **) (char **) ... int的长度是64位 long long
     next(); if (tk == '(') next(); else { printf("%d: open paren expected in sizeof\n", line); exit(-1); }
-    ty = INT; if (tk == Int) next(); else if (tk == Char) { next(); ty = CHAR; }
-    else if (tk == Struct) { 
-      next(); ty = id[STMetaType]; 
-      if (stt_metas[ty].defined == 0) { printf("%d: struct not defined in sizeof\n", line); exit(-1); }
-      next();
+    if (tk == Int || tk == Char || tk == Struct) {
+      ty = INT; if (tk == Int) next(); else if (tk == Char) { next(); ty = CHAR; }
+      else if (tk == Struct) { 
+        next(); ty = id[STMetaType]; 
+        if (stt_metas[ty].defined == 0) { printf("%d: struct not defined in sizeof\n", line); exit(-1); }
+        next();
+      }
+      while (tk == Mul) { next(); ty = ty + PTR; } // 老派程序设计思想，这里可以很好处理指针递归，例如(int *) (int **)
+                                                  // type本身是INT或CHAR，加上PTR分别指代(INT *)和(CHAR *)
+                                                  // 如果是(int **)，则type加上两次PTR
     }
-    while (tk == Mul) { next(); ty = ty + PTR; } // 老派程序设计思想，这里可以很好处理指针递归，例如(int *) (int **)
-                                                 // type本身是INT或CHAR，加上PTR分别指代(INT *)和(CHAR *)
-                                                 // 如果是(int **)，则type加上两次PTR
+    else if (tk == '(') { // 处理括号表达式，类型cast
+      expr(Assign);
+    } 
+    else if (tk == Id || tk == Mul || tk == And) { // 处理sizeof(var)
+      expr(Assign);
+    }
     if (tk == ')') next(); else { printf("%d: close paren expected in sizeof\n", line); exit(-1); }
     // int (int *) (char *) ... 作为sizeof(int)处理
     // 增加结构体的支持
@@ -222,35 +231,6 @@ void expr(int lev)
       if (t) { *++e = ADJ; *++e = t; } // 函数调用完毕后，需要出栈 ADJ t，t是参数个数
       ty = d[Type]; 
     }
-    // 处理struct -> arrow符号
-    else if (tk == Arrow) {
-      // 先判断是不是struct *
-      if (d[Type] < (STRUCT_BEGIN + PTR) || d[Type] >= (PTR * 2)) {
-        printf("%d: not struct\n", line); exit(-1);
-      }
-      ty = d[Type] - PTR;
-      // 然后判断->指向的id合不合法
-      next();
-      if (stt_metas[ty].defined == 0) { printf("%d: struct not defined\n", line); exit(-1); }
-      ptr = stt_metas[ty].ids;
-      mem = 0;
-      while (ptr) { 
-        if (ptr->id[Hash] == id[Hash]) { mem = ptr; ptr = 0; }
-        else ptr = ptr->next;
-      }
-      if (mem == 0) { printf("%d: struct has no member\n", line); exit(-1); }
-      next();
-      //最后分别处理Loc或Glo，参考下面else部分的内容
-      if (d[Class] == Loc) { *++e = LEA; *++e = loc - d[Val]; }
-      else if (d[Class] == Glo) { *++e = IMM; *++e = d[Val]; }
-      else { printf("%d: undefined variable\n", line); exit(-1); }
-      // 先获取内存地址的值，也就是指针指向的地址，然后PSH入栈
-      *++e = LI; *++e = PSH; 
-      // 进行offset运算，相加，得到成员变量的地址
-      *++e = IMM; *++e = mem->id_offset; *++e = ADD;
-      // 最后获取成员变量地址的值
-      *++e = ((ty = mem->id_type) == CHAR) ? LC : LI;
-    }
     else if (d[Class] == Num) { *++e = IMM; *++e = d[Val]; ty = INT; } // Enum类型，IMM d[Val] type: INT
                                                                        // 参考main函数的Enum处理部分
     else {
@@ -270,15 +250,22 @@ void expr(int lev)
       while (tk == Mul) { next(); t = t + PTR; } // 指针，如果有多个* Mul，例如(int **)，t对应的是指针的指针
       if (tk == ')') next(); else { printf("%d: bad cast\n", line); exit(-1); }
       expr(Inc); // 递归expr，优先级需要大于等于Inc，也就是处理i++ i--
+      if (ty == CHAR && t > PTR) {
+        printf("%d: cannot convert char type into pointer\n", line); exit(-1);
+      }
       ty = t;
     }
     else if (tk == Struct) { // 处理struct类型转换
       next();
       if (stt_metas[id[STMetaType]].defined == 0) { printf("%d: struct not defined\n", line); exit(-1); }
       t = id[STMetaType]; next();
+      if (tk != Mul) { printf("%d: cast type struct is not allowed\n", line); exit(-1); }
       while (tk == Mul) { next(); t = t + PTR; }
       if (tk == ')') next(); else { printf("%d: bad cast\n", line); exit(-1); }
       expr(Inc); // 递归expr，优先级需要大于等于Inc，也就是处理i++ i--
+      if ((ty >= STRUCT_BEGIN && ty < PTR) && t > PTR) {
+        printf("%d: cannot convert struct type into pointer\n", line); exit(-1);
+      }
       ty = t;
     }
     else { // 直接作为普通的表达式处理，这个优先级最高，直接运算括号内部expr
@@ -288,7 +275,7 @@ void expr(int lev)
   }
   else if (tk == Mul) { // 指针 *ptr
     next(); expr(Inc); // 递归expr，优先级大于等于INC，只需要判断 ++ --
-    if (ty > INT) ty = ty - PTR; else { printf("%d: bad dereference\n", line); exit(-1); } // 减一层PTR
+    if (ty >= PTR) ty = ty - PTR; else { printf("%d: bad dereference\n", line); exit(-1); } // 减一层PTR
     *++e = (ty == CHAR) ? LC : LI; // load，reg = *(reg)
   }
   else if (tk == And) { // &取地址
@@ -423,10 +410,60 @@ void expr(int lev)
     else if (tk == Brak) { //处理数组索引 例如 a[2] = 5;
       next(); *++e = PSH; expr(Assign); // 把第一个值PSH，然后expr递归计算
       if (tk == ']') next(); else { printf("%d: close bracket expected\n", line); exit(-1); }
-      if (t > PTR) { *++e = PSH; *++e = IMM; *++e = sizeof(int); *++e = MUL;  } // 计算偏移
+      if (t > PTR) { *++e = PSH; *++e = IMM; *++e = sizeof(int); *++e = MUL;  } // 对于除开char，都要做指针计算
       else if (t < PTR) { printf("%d: pointer type expected\n", line); exit(-1); }
       *++e = ADD; // 得到偏移地址
       *++e = ((ty = t - PTR) == CHAR) ? LC : LI; // load 指针指向的值 
+    }
+    // 处理struct -> arrow符号
+    else if (tk == Arrow) {
+      // 先判断是不是struct *
+      if (t < (STRUCT_BEGIN + PTR) || t >= (PTR * 2)) {
+        printf("%d: -> op not struct pointer\n", line); exit(-1);
+      }
+      ty = t - PTR;
+      // 然后判断->指向的id合不合法
+      next();
+      if (stt_metas[ty].defined == 0) { printf("%d: struct not defined\n", line); exit(-1); }
+      ptr = stt_metas[ty].ids;
+      mem = 0;
+      while (ptr) { 
+        if (ptr->id[Hash] == id[Hash]) { mem = ptr; ptr = 0; }
+        else ptr = ptr->next;
+      }
+      if (mem == 0) { printf("%d: struct has no member\n", line); exit(-1); }
+      next();
+      // PSH入栈
+      *++e = PSH;
+      // 进行offset运算，相加，得到成员变量的地址
+      *++e = IMM; *++e = mem->id_offset; *++e = ADD;
+      // 最后获取成员变量地址的值
+      *++e = ((ty = mem->id_type) == CHAR) ? LC : LI;
+    }
+    // 处理struct . 符号
+    else if (tk == Dot) {
+      // 先判断是不是struct
+      if (t < STRUCT_BEGIN || t >= PTR) {
+        printf("%d: dot op not struct\n", line); exit(-1);
+      }
+      // 然后判断 . 指向的id合不合法
+      next();
+      if (stt_metas[ty].defined == 0) { printf("%d: struct not defined\n", line); exit(-1); }
+      ptr = stt_metas[ty].ids;
+      mem = 0;
+      while (ptr) {
+        if (ptr->id[Hash] == id[Hash]) { mem = ptr; ptr = 0; }
+        else ptr = ptr->next;
+      }
+      if (mem == 0) { printf("%d: struct has no member\n", line); exit(-1); }
+      next();
+      // 由于上一条指令是LI已经load到了结构体的内存地址，去掉这一条指令，直接操作地址
+      if (*e == LI) { *e = PSH; }
+      else { printf("%d: struct var error\n", line); exit(-1); }
+      // 进行offset运算，相加，得到成员变量的地址
+      *++e = IMM; *++e = mem->id_offset; *++e = ADD;
+      // 最后获取成员变量地址的值
+      *++e = ((ty = mem->id_type) == CHAR) ? LC : LI;
     }
     else { printf("%d: compiler error tk=%d\n", line, tk); exit(-1); }
   }
