@@ -181,6 +181,10 @@ void expr(int lev)
     while (tk == '"') next(); // 如果是连续的多个字符串，继续往后处理并进行拼接
     data = (char *)((int)data + sizeof(int) & -sizeof(int)); ty = PTR; // 由于data是一个个char传入的，这里做指针对齐
   }
+  // TODO:
+  // 1. 这个sizeof的实现不符合C语言标准，在sizeof里面只做类型推导，而不会真的做运算，所以要处理好 = ++ --
+  // 2. sizeof嵌套问题也要处理，sizeof返回的是unsigned long类型
+  // 3. sizeof(1)也要处理，返回的是unsigned long长度
   else if (tk == Sizeof) { // 支持int char (int *) (char *) (int **) (char **) ... int的长度是64位 long long
     next(); if (tk == '(') next(); else { printf("%d: open paren expected in sizeof\n", line); exit(-1); }
     if (tk == Int || tk == Char || tk == Struct) {
@@ -196,7 +200,7 @@ void expr(int lev)
     }
     else if (tk == '(') { // 处理括号表达式，类型cast
       expr(Assign);
-    } 
+    }
     else if (tk == Id || tk == Mul || tk == And) { // 处理sizeof(var)
       expr(Assign);
     }

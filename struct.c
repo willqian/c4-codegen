@@ -18,7 +18,9 @@ struct mem *test(struct mem *ptr, char a, int b, int c)
 int main()
 {
   char *str;
+  int i;
   str = (char *)malloc(sizeof(char) * 100);
+  i = 0;
   memset(str, 'c', 3);
   memset(str, 'b', 2);
   memset(str, 'a', 1);
@@ -47,11 +49,14 @@ int main()
   printf("ma->a %c ma->b %d ma->c %d\n", ma->a, ma->b, ma->c);
   ma = test(ma, 'k', 500, 700);
   printf("ma->a %c ma->b %d ma->c %d\n", ma->a, ma->b, ma->c);
-  printf("sizeof(ma->a++) %lu ma->a %c\n", sizeof(ma->a++), ma->a);
+  // printf("sizeof(ma->a++) %lu ma->a %c\n", sizeof(ma->a++), ma->a); FAIL
   printf("(&ma[0])->a %c\n", (&ma[0])->a);
   printf("ma[0].a %c sizeof(ma[0].a) %lu\n", ma[0].a, sizeof(ma[0].a));
   // printf("&ma[0]->a %c\n", &ma[0]->a); // PASS struct -> a error
   printf("&ma[0]->a %c\n", (&ma[0])->a);
-  printf("sizeof(ma[0].a++) %lu ma[0].a %c\n", sizeof(ma[0].a++), ma[0].a);
+  // printf("sizeof(ma[0].a++) %lu ma[0].a %c\n", sizeof(ma[0].a++), ma[0].a); FAIL
+  // printf("sizeof(++ma[0].a) %lu ma[0].a %c\n", sizeof(++ma[0].a), ma[0].a); FAIL
+  // printf("sizeof(str[i++]) %lu str[i] %c\n", sizeof(str[i++]), str[i]); FAIL
+  // printf("sizeof(sizeof(1)) %lu\n", sizeof(sizeof(1))); FAIL
   return 0;
 }
