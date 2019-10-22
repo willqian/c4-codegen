@@ -695,8 +695,14 @@ int main(int argc, char **argv)
         if (tk != '{') { printf("%d: bad function definition\n", line); return -1; }
         loc = ++i; // loc等于1
         next();
-        while (tk == Int || tk == Char) { // 处理函数局部变量定义
-          bt = (tk == Int) ? INT : CHAR;
+        while (tk == Int || tk == Char || tk == Struct) { // 处理函数局部变量定义
+          if (tk == Int) { bt = INT; }
+          else if (tk == Char) { bt = CHAR; }
+          else if (tk == Struct) {
+            next();
+            if (stt_metas[id[STMetaType]].defined == 0) { printf("%d: struct not defined\n", line); return -1; }
+            bt = id[STMetaType];
+          }
           next();
           while (tk != ';') {
             ty = bt;

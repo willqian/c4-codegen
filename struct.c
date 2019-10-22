@@ -17,9 +17,15 @@ struct mem *test(struct mem *ptr, char a, int b, int c)
 
 int main()
 {
+  struct mem *mb;
   char *str;
   int i;
   str = (char *)malloc(sizeof(char) * 100);
+  mb = (struct mem *)malloc(sizeof(struct mem));
+  mb->a = 'u';
+  mb->b = 5;
+  mb->c = 100;
+  printf("mb->a %c mb->b %d mb->c %d\n", mb->a, mb->b, mb->c);
   i = 0;
   memset(str, 'c', 3);
   memset(str, 'b', 2);
