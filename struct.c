@@ -3,7 +3,7 @@
 
 struct empty {
 
-} et;
+} et, et1;
 
 struct mem {
   char a;
@@ -39,6 +39,9 @@ int main()
   int cc;
   char *str;
   int i;
+  struct empty ett;
+  printf("&et %p &ma %p\n", &et, &ma);
+  printf("sizeof(ett) %lu ptr %p sizeof(et) %lu ptr %p et1 ptr %p\n", sizeof(ett), &ett, sizeof(et), &et, &et1);
   str = (char *)malloc(sizeof(char) * 100);
   mb = (struct mem *)malloc(sizeof(struct mem));
   mb->a = 'u';

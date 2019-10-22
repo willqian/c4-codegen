@@ -707,9 +707,8 @@ int main(int argc, char **argv)
             k = (stt_metas[id[Type]].size + sizeof(int) - 1) / sizeof(int);
             if (k == 0) k = 1; // 没有成员的结构体也分配空间
             i += k;
-            id[HVal] = id[Val];   id[Val] = i - 1;  // 结构体在栈上分布是低地址往高地址走，向高地址索引
-                                                    // 这里与局部变量有区别，看栈帧结构即可知道原因
-                                                    // 因为索引函数传参的变量是从低地址往高地址走
+            id[HVal] = id[Val];   id[Val] = i - 1;  // 局部变量是高地址往低地址走，所以先要索引到结构体的低地址
+                                                    // 函数参数与局部变量的位置在不同的区域，看栈帧结构
           } else {
             id[HVal] = id[Val];   id[Val] = i++;
           }
@@ -767,7 +766,9 @@ int main(int argc, char **argv)
         id[Class] = Glo;
         id[Val] = (int)data;
         if (id[Type] >= STRUCT_BEGIN && id[Type] < PTR) { // 结构体变量
-          data = data + stt_metas[id[Type]].size; // 分配了结构体的长度
+          k = stt_metas[id[Type]].size;
+          if (k == 0) k = sizeof(int); // 没有成员的结构体也分配空间
+          data = data + k; // 分配了结构体的长度
         } else {
           data = data + sizeof(int); // 分配了一个int长度的数据内存
         }
