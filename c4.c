@@ -36,8 +36,7 @@ struct stt_meta_id {
   struct stt_meta_id *next;
 };
 
-// v1: 先只支持简单结构体定义，不支持结构体嵌套定义
-// 结构体嵌套定义也就只需要在ident struct上通过STMetaType字段做索引即可
+// TODO: ./c4 c4.c c4.c struct.c 会报结构体重复定义，待处理
 struct stt_meta {
   struct stt_meta_id *ids;
   int id_num;       // 结构体成员个数
@@ -186,6 +185,7 @@ void expr(int lev)
   // 1. 这个sizeof的实现不符合C语言标准，在sizeof里面只做类型推导，而不会真的做运算，所以要处理好 = ++ --
   // 2. sizeof嵌套问题也要处理，sizeof返回的是unsigned long类型
   // 3. sizeof(1)也要处理，返回的是unsigned long长度
+  // 4. ./c4 c4.c struct.c 的sizeof空结构体(struct empty)会有问题，待处理
   else if (tk == Sizeof) { // 支持int char (int *) (char *) (int **) (char **) ... int的长度是64位 long long
     next(); if (tk == '(') next(); else { printf("%d: open paren expected in sizeof\n", line); exit(-1); }
     if (tk == Int || tk == Char || tk == Struct) {
@@ -335,6 +335,7 @@ void expr(int lev)
                       // 例如1+1*2/2，除号和乘号优先级平行，不需要递归，是顺序遍历的，对应的栈如下
                       // | 1 | 1 | 2 | * | 2 | / | + |
     t = ty;
+    // TODO: 处理结构体赋值
     if (tk == Assign) {
       next();
       // 修改LC/LI为PSH，把变量栈地址入栈，后面需要SC/SI store 变量
@@ -547,8 +548,8 @@ int main(int argc, char **argv)
   struct stt_meta *stm; // struct meta
   struct stt_meta_id *stm_id; // struct meta id
   struct stt_meta_id **cur;
-  int sttotal = PTR;
-  int stindex = STRUCT_BEGIN;
+  int sttotal;
+  int stindex;
 
   --argc; ++argv;
   if (argc > 0 && **argv == '-' && (*argv)[1] == 's') { src = 1; --argc; ++argv; }
@@ -558,6 +559,8 @@ int main(int argc, char **argv)
   if ((fd = open(*argv, 0)) < 0) { printf("could not open(%s)\n", *argv); return -1; }
 
   poolsz = 256*1024; // arbitrary size
+  sttotal = PTR;
+  stindex = STRUCT_BEGIN;
   if (!(sym = malloc(poolsz))) { printf("could not malloc(%d) symbol area\n", poolsz); return -1; }
   if (!(le = e = malloc(poolsz))) { printf("could not malloc(%d) text area\n", poolsz); return -1; }
   if (!(data = malloc(poolsz))) { printf("could not malloc(%d) data area\n", poolsz); return -1; }
@@ -632,7 +635,7 @@ int main(int argc, char **argv)
             next();
             if (tk != Id) { printf("%d: expected struct id, but token %d\n", line, tk); return -1; }
             // 判断结构体是否定义过
-            if (stt_metas[id[STMetaType]].defined == 0) { printf("%d: struct not defined\n", line); return -1; }
+            if (stt_metas[id[STMetaType]].defined == 0 && id[STMetaType] != (stindex - 1)) { printf("%d: struct not defined\n", line); return -1; }
             mem_bt = id[STMetaType];
             next();
           }
@@ -655,7 +658,7 @@ int main(int argc, char **argv)
               k = (k + sizeof(int) - 1) & -sizeof(int);
             }
             stm_id->id_offset = k;
-            k += j;
+            k = k + j;
             stm_id->id_size = j;
             stm_id->id_type = ty;
             *cur = stm_id;
@@ -706,7 +709,7 @@ int main(int argc, char **argv)
           if (id[Type] >= STRUCT_BEGIN && id[Type] < PTR) { // 结构体变量
             k = (stt_metas[id[Type]].size + sizeof(int) - 1) / sizeof(int);
             if (k == 0) k = 1; // 没有成员的结构体也分配空间
-            i += k;
+            i = i + k;
             id[HVal] = id[Val];   id[Val] = i - 1;  // 局部变量是高地址往低地址走，所以先要索引到结构体的低地址
                                                     // 函数参数与局部变量的位置在不同的区域，看栈帧结构
           } else {
@@ -740,7 +743,7 @@ int main(int argc, char **argv)
               k = (stt_metas[id[Type]].size + sizeof(int) - 1) / sizeof(int);
               if (k == 0) k = 1; // 没有成员的结构体也分配空间
               id[HVal] = id[Val];   id[Val] = i + k; // 局部变量是高地址往低地址走，所以先要索引到结构体的低地址
-              i += k;
+              i = i + k;
             } else {
               id[HVal] = id[Val];   id[Val] = ++i; // 局部变量从2开始计数
             }
