@@ -1,23 +1,42 @@
 #include <stdio.h>
 #include <stdlib.h>
 
+struct empty {
+
+} et;
+
 struct mem {
   char a;
   int b;
   int c;
-} *ma;
+} *ma, mc;
+
+int ga;
 
 struct mem *test(struct mem *ptr, char a, int b, int c)
 {
+  int k;
   ptr->a = a;
   ptr->b = b;
   ptr->c = c;
   return ptr;
 }
 
+struct mem *test1(struct mem obj)
+{
+  int i;
+  ma->a = obj.a;
+  ma->b = obj.b;
+  ma->c = obj.c;
+  printf("obj.a %c, obj.b %d, obj.c %d\n", obj.a, obj.b, obj.c);
+}
+
 int main()
 {
   struct mem *mb;
+  int bb;
+  struct mem md;
+  int cc;
   char *str;
   int i;
   str = (char *)malloc(sizeof(char) * 100);
@@ -26,12 +45,35 @@ int main()
   mb->b = 5;
   mb->c = 100;
   printf("mb->a %c mb->b %d mb->c %d\n", mb->a, mb->b, mb->c);
+  mc.a = 'f';
+  mc.b = 125;
+  mc.c = 321;
+  printf("mc.a %c mc.b %d mc.c %d\n", mc.a, mc.b, mc.c);
+  ga = 555;
+  printf("mc.a %c mc.b %d mc.c %d\n", mc.a, mc.b, mc.c);
+  printf("ga %d\n", ga);
+  md.a = 'f';
+  md.b = 222;
+  md.c = 78;
+  printf("md.a %c, md.b %d, md.c %d\n", md.a, md.b, md.c);
+  printf("md.a %c md.b %d md.c %d\n", md.a, md.b, md.c);
+  bb = 345;
+  cc = 543;
+  printf("md.a %c md.b %d md.c %d\n", md.a, md.b, md.c);
+  printf("&md.a %p &md.b %p &md.c %p\n", &md.a, &md.b, &md.c);
+  printf("&bb %p\n", &bb);
+  printf("&md %p\n", &md);
+  printf("&cc %p\n", &cc);
+  printf("sizeof(et) %d\n", sizeof(et));
   i = 0;
   memset(str, 'c', 3);
   memset(str, 'b', 2);
   memset(str, 'a', 1);
   printf("str[0] %c str[1] %c str[2] %c\n", str[0], str[1], str[2]);
   ma = (struct mem *)malloc(sizeof(struct mem));
+  test1(md);
+  printf("md.a %c, md.b %d, md.c %d\n", md.a, md.b, md.c);
+  printf("ma->a %c, ma->b %d, ma->c %d\n", ma->a, ma->b, ma->c);
   printf("ma %p &ma->a %p, &ma->b %p, &ma->c %p\n", ma, &ma->a, &ma->b, &ma->c);
   printf("sizeof(struct mem *) %lu\n", sizeof(struct mem *)); 
   printf("sizeof(ma) %lu\n", sizeof(ma));

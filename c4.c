@@ -171,7 +171,7 @@ void next()
 
 void expr(int lev)
 {
-  int t, *d;
+  int t, *d, i, k;
   struct stt_meta_id *ptr, *mem;
   // e指向的是代码段，当然这里代码段都是存在内存里
   // expr先处理的是表达式的左部分，右部分放在了后面的while(tk >= lev)循环里
@@ -216,15 +216,31 @@ void expr(int lev)
   }
   else if (tk == Id) { // 处理定义的变量和函数
     d = id; next();
-    if (tk == '(') {
+    if (tk == '(') { // 函数调用
       next();
       t = 0;
-      while (tk != ')') { 
+      while (tk != ')') {
         expr(Assign); // 获取函数参数，Assign的含义是，后续如果符号优先级大于等于Assign，则可以进行表达式运算
                       // 优先级爬坡，下面while (tk >= lev)会提到，这是一种递归的算法，最终递归终止于最高优先级运算
                       // 比如第一个参数如果是: sizeof(int) + 4，会递归调用先处理sizeof(int)，然后next token是 + 号，
                       // 优先级高于assign，递归获得下一个num 4，4后面是,逗号或者)右括号，退出递归调用
-        *++e = PSH; ++t; // 把参数PUSH入栈
+        if (ty >= STRUCT_BEGIN && ty < PTR) { // 结构体要多次PSH
+          if (*e == LC || *e == LI) { *--e = 0; } // 上一条load指令先去掉
+          k = (stt_metas[id[Type]].size + sizeof(int) - 1) / sizeof(int);
+          if (k == 0) k = 1; // 没有成员的结构体也分配空间
+          i = k - 1;
+          while (i >= 0) { // 需要注意，push的方向，先push高地址，再push低地址
+            if (id[Class] == Loc) { 
+              *++e = LEA; *++e = loc - id[Val] + i;
+            }
+            else if (id[Class] == Glo) { *++e = IMM; *++e = id[Val] + i * sizeof(int); }
+            *++e = ((ty = d[Type]) == CHAR) ? LC : LI;
+            *++e = PSH; ++t; // 把结构体值PUSH入栈
+            i--;
+          }
+        } else {
+          *++e = PSH; ++t; // 把参数PUSH入栈
+        } 
         //if (tk == ',') next(); // 这里有bug，如果参数之间没有逗号，也不会报错，如下两行fix了这个问题
         if (tk == ',') { next(); if(tk == ')') { printf("%d: error unexpected comma in function call\n", line); exit(-1); }}
         else if(tk != ')') { printf("%d: error missing comma in function call\n", line); exit(-1); }
@@ -661,12 +677,12 @@ int main(int argc, char **argv)
     }
     while (tk != ';' && tk != '}') {
       ty = bt; // 符号类型，或函数返回值类型
-      // TODO: 处理struct返回值，先只处理指针形式的
       while (tk == Mul) { next(); ty = ty + PTR; } // 有*号，是指针，递归进行
       if (tk != Id) { printf("%d: bad global declaration\n", line); return -1; }
       if (id[Class]) { printf("%d: duplicate global definition\n", line); return -1; }
       next();
       id[Type] = ty;
+      // TODO: 待处理结构体函数返回值
       if (tk == '(') { // function 处理函数定义
         id[Class] = Fun;
         id[Val] = (int)(e + 1); // 函数地址
@@ -675,7 +691,7 @@ int main(int argc, char **argv)
           ty = INT;
           if (tk == Int) next();
           else if (tk == Char) { next(); ty = CHAR; }
-          else if (tk == Struct) { // TODO: 处理struct传参，先只处理指针传参
+          else if (tk == Struct) {
             next();
             if (stt_metas[id[STMetaType]].defined == 0) { printf("%d: struct not defined\n", line); return -1; }
             ty = id[STMetaType];
@@ -687,13 +703,22 @@ int main(int argc, char **argv)
           // 如果之前定义过该变量（例如全局），暂存在HClass HType HVal中（如果没定义过则是空值），并设置新的Class Type Val
           id[HClass] = id[Class]; id[Class] = Loc;
           id[HType]  = id[Type];  id[Type] = ty;
-          id[HVal]   = id[Val];   id[Val] = i++;
+          if (id[Type] >= STRUCT_BEGIN && id[Type] < PTR) { // 结构体变量
+            k = (stt_metas[id[Type]].size + sizeof(int) - 1) / sizeof(int);
+            if (k == 0) k = 1; // 没有成员的结构体也分配空间
+            i += k;
+            id[HVal] = id[Val];   id[Val] = i - 1;  // 结构体在栈上分布是低地址往高地址走，向高地址索引
+                                                    // 这里与局部变量有区别，看栈帧结构即可知道原因
+                                                    // 因为索引函数传参的变量是从低地址往高地址走
+          } else {
+            id[HVal] = id[Val];   id[Val] = i++;
+          }
           next();
           if (tk == ',') next();
         }
         next();
         if (tk != '{') { printf("%d: bad function definition\n", line); return -1; }
-        loc = ++i; // loc等于1
+        loc = ++i; // loc等于++i，以上计算了函数的参数，下面是函数的局部变量
         next();
         while (tk == Int || tk == Char || tk == Struct) { // 处理函数局部变量定义
           if (tk == Int) { bt = INT; }
@@ -712,15 +737,21 @@ int main(int argc, char **argv)
             // 如果之前定义过该变量，暂存在HClass HType HVal中，并设置新的Class Type Val
             id[HClass] = id[Class]; id[Class] = Loc;
             id[HType]  = id[Type];  id[Type] = ty;
-            id[HVal]   = id[Val];   id[Val] = ++i; // 局部变量从2开始计数
-            // TODO: 待支持struct变量的内存分配，先只处理struct指针类型
+            if (id[Type] >= STRUCT_BEGIN && id[Type] < PTR) { // 结构体变量
+              k = (stt_metas[id[Type]].size + sizeof(int) - 1) / sizeof(int);
+              if (k == 0) k = 1; // 没有成员的结构体也分配空间
+              id[HVal] = id[Val];   id[Val] = i + k; // 局部变量是高地址往低地址走，所以先要索引到结构体的低地址
+              i += k;
+            } else {
+              id[HVal] = id[Val];   id[Val] = ++i; // 局部变量从2开始计数
+            }
             next();
             if (tk == ',') next();
           }
           next();
         }
         *++e = ENT; *++e = i - loc; // enter 函数，ENT i - loc，也就是局部变量的个数
-        while (tk != '}') stmt();
+        while (tk != '}') stmt(); // 处理函数内部语句
         *++e = LEV; // 退出函数
         id = sym; // unwind symbol table locals
         while (id[Tk]) {
@@ -733,10 +764,13 @@ int main(int argc, char **argv)
         }
       }
       else { // 全局变量
-        // TODO: 待支持struct变量的内存分配，先只处理struct指针类型
         id[Class] = Glo;
-        id[Val] = (int)data; // 分配了一个int长度的数据内存
-        data = data + sizeof(int);
+        id[Val] = (int)data;
+        if (id[Type] >= STRUCT_BEGIN && id[Type] < PTR) { // 结构体变量
+          data = data + stt_metas[id[Type]].size; // 分配了结构体的长度
+        } else {
+          data = data + sizeof(int); // 分配了一个int长度的数据内存
+        }
       }
       if (tk == ',') next();
     }
