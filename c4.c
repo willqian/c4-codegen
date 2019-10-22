@@ -5,6 +5,7 @@
 // just enough features to allow self-compilation and a bit more
 
 // Written by Robert Swierczek
+// 福强进一步探索，尝试基于c4做代码生成等一系列工作
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -254,7 +255,7 @@ void expr(int lev)
       while (tk == Mul) { next(); t = t + PTR; } // 指针，如果有多个* Mul，例如(int **)，t对应的是指针的指针
       if (tk == ')') next(); else { printf("%d: bad cast\n", line); exit(-1); }
       expr(Inc); // 递归expr，优先级需要大于等于Inc，也就是处理i++ i--
-      if (ty == CHAR && t > PTR) {
+      if (ty == CHAR && t >= PTR) {
         printf("%d: cannot convert char type into pointer\n", line); exit(-1);
       }
       ty = t;
@@ -267,7 +268,7 @@ void expr(int lev)
       while (tk == Mul) { next(); t = t + PTR; }
       if (tk == ')') next(); else { printf("%d: bad cast\n", line); exit(-1); }
       expr(Inc); // 递归expr，优先级需要大于等于Inc，也就是处理i++ i--
-      if ((ty >= STRUCT_BEGIN && ty < PTR) && t > PTR) {
+      if ((ty >= STRUCT_BEGIN && ty < PTR) && t >= PTR) {
         printf("%d: cannot convert struct type into pointer\n", line); exit(-1);
       }
       ty = t;
