@@ -27,6 +27,7 @@ int *e, *le,  // current position in emitted code
     line,     // current line number
     src,      // print source and assembly flag
     debug;    // print executed instructions
+    proto;    // proto code generate mode
 
 struct stt_meta_id {
   int *id;          // 结构体成员定义，指向ident struct
@@ -44,11 +45,24 @@ struct stt_meta {
   int defined;      // 结构体是否定义过
 } *stt_metas; // 结构体元数据数组
 
+struct proto_meta_param {
+  int ty;
+  int io;
+  struct proto_meta_param *next;
+};
+
+struct proto_meta {
+  int *id;
+  char *name;
+  struct proto_meta_param *id_params;
+  int defined;
+} *proto_metas;
+
 // tokens and classes (operators last and in precedence order)
 // 结构体索引成员变量token . 和 -> 优先级最高
 enum {
-  Num = 128, Fun, Sys, Glo, Loc, Id,
-  Char, Else, Enum, If, Int, Struct, Return, Sizeof, While,
+  Num = 128, Fun, Proto, Sys, Glo, Loc, Id,
+  Char, Else, Enum, If, Int, Struct, Ro, Wo, Rw, Return, Sizeof, While,
   Assign, Cond, Lor, Lan, Or, Xor, And, Eq, Ne, Lt, Gt, Le, Ge, Shl, Shr, Add, Sub, Mul, Div, Mod, Inc, Dec, Brak, Dot, Arrow,
 };
 
@@ -64,7 +78,7 @@ enum { CHAR, INT, STRUCT_BEGIN, PTR = 1024 }; // struct排列在INT后，最多�
 // 这个数据结构本身定义symbol，这里我们也复用为结构体定义的symbol
 // 比如 struct member {...}; 又有 int member，那么这两个同名但类型不同，所以需要加一个STMetaType字段，表示这个symbol也是结构体meta定义
 // 另外 struct 成员变量其实也会在这里复用，暂时先不处理
-enum { Tk, Hash, Name, Class, Type, Val, STMetaType, HClass, HType, HVal, Idsz };
+enum { Tk, Hash, Name, NameLen, Class, Type, Val, STMetaType, HClass, HType, HVal, Idsz };
 
 void next()
 {
@@ -110,6 +124,7 @@ void next()
         id = id + Idsz;
       }
       id[Name] = (int)pp; // pp存的是字符串基地址
+      id[NameLen] = p - pp;
       id[Hash] = tk;
       tk = id[Tk] = Id;
       return;
@@ -134,7 +149,6 @@ void next()
         return;
       }
     }
-    // TODO: 这里最好给字符串尾部加一个'\0'，否则无法通过pp指针获取字符串长度
     else if (tk == '\'' || tk == '"') {
       pp = data;
       while (*p != 0 && *p != tk) {
@@ -550,30 +564,39 @@ int main(int argc, char **argv)
   struct stt_meta_id **cur;
   int sttotal;
   int stindex;
+  struct proto_meta *pproto;
+  struct proto_meta *proto_ptr;
+  int protoindex;
+  int *d;
+  struct proto_meta_param **pmp_cur;
 
   --argc; ++argv;
   if (argc > 0 && **argv == '-' && (*argv)[1] == 's') { src = 1; --argc; ++argv; }
   if (argc > 0 && **argv == '-' && (*argv)[1] == 'd') { debug = 1; --argc; ++argv; }
-  if (argc < 1) { printf("usage: c4 [-s] [-d] file ...\n"); return -1; }
+  if (argc > 0 && **argv == '-' && (*argv)[1] == 'p') { proto = 1; --argc; ++argv; }
+  if (argc < 1) { printf("usage: c4 [-s] [-d] [-p] file ...\n"); return -1; }
 
   if ((fd = open(*argv, 0)) < 0) { printf("could not open(%s)\n", *argv); return -1; }
 
   poolsz = 256*1024; // arbitrary size
   sttotal = PTR;
   stindex = STRUCT_BEGIN;
+  protoindex = 0;
   if (!(sym = malloc(poolsz))) { printf("could not malloc(%d) symbol area\n", poolsz); return -1; }
   if (!(le = e = malloc(poolsz))) { printf("could not malloc(%d) text area\n", poolsz); return -1; }
   if (!(data = malloc(poolsz))) { printf("could not malloc(%d) data area\n", poolsz); return -1; }
   if (!(sp = malloc(poolsz))) { printf("could not malloc(%d) stack area\n", poolsz); return -1; }
-  if (!(stt_metas = malloc(sttotal * sizeof(struct stt_meta)))) { printf("could not malloc(%d) struct meta area\n", poolsz); return -1; }
+  if (!(stt_metas = malloc(sttotal * sizeof(struct stt_meta)))) { printf("could not malloc struct meta area\n"); return -1; }
+  if (!(proto_metas = malloc(sttotal * sizeof(struct proto_meta)))) { printf("could not malloc proto area\n"); return -1; }
 
   memset(sym,  0, poolsz);
   memset(e,    0, poolsz);
   memset(data, 0, poolsz);
   memset(stt_metas,  0, sttotal * sizeof(struct stt_meta));
+  memset(proto_metas,  0, sttotal * sizeof(struct proto_meta));
 
   // 先把这些特殊符号加到id table上，最后一个是main，程序从main开始运行
-  p = "char else enum if int struct return sizeof while "
+  p = "char else enum if int struct IO_RO IO_WO IO_RW return sizeof while "
       "open read close printf malloc free memset memcmp exit void main";
   i = Char; while (i <= While) { next(); id[Tk] = i++; } // add keywords to symbol table
   i = OPEN; while (i <= EXIT) { next(); id[Class] = Sys; id[Type] = INT; id[Val] = i++; } // add library to symbol table
@@ -687,8 +710,22 @@ int main(int argc, char **argv)
       id[Type] = ty;
       // TODO: 待处理结构体函数返回值
       if (tk == '(') { // function 处理函数定义
+        d = id;
         id[Class] = Fun;
         id[Val] = (int)(e + 1); // 函数地址
+        if (proto) {
+          pproto = &proto_metas[protoindex++];
+          pproto->id = d;
+          pproto->name = malloc(d[NameLen] + 1);
+          j = 0;
+          while (j < d[NameLen]) {
+            pproto->name[j] = ((char *)d[Name])[j];
+            j++;
+          }
+          pproto->name[j] = '\0';
+          // printf("proto [%s]\n", pproto->name);
+          pmp_cur = &pproto->id_params;
+        }
         next(); i = 0;
         while (tk != ')') { // 处理函数参数定义
           ty = INT;
@@ -715,54 +752,80 @@ int main(int argc, char **argv)
           } else {
             id[HVal] = id[Val];   id[Val] = i++;
           }
+          d = id;
           next();
+          if (proto) {
+            *pmp_cur = (struct proto_meta_param *)malloc(sizeof(struct proto_meta_param));
+            (*pmp_cur)->ty = d[Type];
+            if (tk == Ro || tk == Wo || tk == Rw) {
+              (*pmp_cur)->io = tk;
+              next();
+            }
+            // printf("proto param type %d io[%d]\n", (*pmp_cur)->ty, (*pmp_cur)->io);
+            pmp_cur = &((*pmp_cur)->next);
+          }    
           if (tk == ',') next();
         }
         next();
-        if (tk != '{') { printf("%d: bad function definition\n", line); return -1; }
-        loc = ++i; // loc等于++i，以上计算了函数的参数，下面是函数的局部变量
-        next();
-        while (tk == Int || tk == Char || tk == Struct) { // 处理函数局部变量定义
-          if (tk == Int) { bt = INT; }
-          else if (tk == Char) { bt = CHAR; }
-          else if (tk == Struct) {
-            next();
-            if (stt_metas[id[STMetaType]].defined == 0) { printf("%d: struct not defined\n", line); return -1; }
-            bt = id[STMetaType];
+        if (proto) {
+          if (tk != ';') { printf("%d: bad function proto\n", line); return -1; }
+          pproto->defined = 1;
+          id = sym; // unwind symbol table locals
+          while (id[Tk]) {
+            if (id[Class] == Loc) { // 恢复Loc变量Class Type Val
+              id[Class] = id[HClass];
+              id[Type] = id[HType];
+              id[Val] = id[HVal];
+            }
+            id = id + Idsz;
           }
+        }
+        else if (tk != '{') { printf("%d: bad function\n", line); return -1; }
+        else {
+          loc = ++i; // loc等于++i，以上计算了函数的参数，下面是函数的局部变量
           next();
-          while (tk != ';') {
-            ty = bt;
-            while (tk == Mul) { next(); ty = ty + PTR; }
-            if (tk != Id) { printf("%d: bad local declaration\n", line); return -1; }
-            if (id[Class] == Loc) { printf("%d: duplicate local definition\n", line); return -1; }
-            // 如果之前定义过该变量，暂存在HClass HType HVal中，并设置新的Class Type Val
-            id[HClass] = id[Class]; id[Class] = Loc;
-            id[HType]  = id[Type];  id[Type] = ty;
-            if (id[Type] >= STRUCT_BEGIN && id[Type] < PTR) { // 结构体变量
-              k = (stt_metas[id[Type]].size + sizeof(int) - 1) / sizeof(int);
-              if (k == 0) k = 1; // 没有成员的结构体也分配空间
-              id[HVal] = id[Val];   id[Val] = i + k; // 局部变量是高地址往低地址走，所以先要索引到结构体的低地址
-              i = i + k;
-            } else {
-              id[HVal] = id[Val];   id[Val] = ++i; // 局部变量从2开始计数
+          while (tk == Int || tk == Char || tk == Struct) { // 处理函数局部变量定义
+            if (tk == Int) { bt = INT; }
+            else if (tk == Char) { bt = CHAR; }
+            else if (tk == Struct) {
+              next();
+              if (stt_metas[id[STMetaType]].defined == 0) { printf("%d: struct not defined\n", line); return -1; }
+              bt = id[STMetaType];
             }
             next();
-            if (tk == ',') next();
+            while (tk != ';') {
+              ty = bt;
+              while (tk == Mul) { next(); ty = ty + PTR; }
+              if (tk != Id) { printf("%d: bad local declaration\n", line); return -1; }
+              if (id[Class] == Loc) { printf("%d: duplicate local definition\n", line); return -1; }
+              // 如果之前定义过该变量，暂存在HClass HType HVal中，并设置新的Class Type Val
+              id[HClass] = id[Class]; id[Class] = Loc;
+              id[HType]  = id[Type];  id[Type] = ty;
+              if (id[Type] >= STRUCT_BEGIN && id[Type] < PTR) { // 结构体变量
+                k = (stt_metas[id[Type]].size + sizeof(int) - 1) / sizeof(int);
+                if (k == 0) k = 1; // 没有成员的结构体也分配空间
+                id[HVal] = id[Val];   id[Val] = i + k; // 局部变量是高地址往低地址走，所以先要索引到结构体的低地址
+                i = i + k;
+              } else {
+                id[HVal] = id[Val];   id[Val] = ++i; // 局部变量从2开始计数
+              }
+              next();
+              if (tk == ',') next();
+            }
+            next();
           }
-          next();
-        }
-        *++e = ENT; *++e = i - loc; // enter 函数，ENT i - loc，也就是局部变量的个数
-        while (tk != '}') stmt(); // 处理函数内部语句
-        *++e = LEV; // 退出函数
-        id = sym; // unwind symbol table locals
-        while (id[Tk]) {
-          if (id[Class] == Loc) { // 恢复Loc变量Class Type Val
-            id[Class] = id[HClass];
-            id[Type] = id[HType];
-            id[Val] = id[HVal];
-          }
-          id = id + Idsz;
+          *++e = ENT; *++e = i - loc; // enter 函数，ENT i - loc，也就是局部变量的个数
+          while (tk != '}') stmt(); // 处理函数内部语句
+          *++e = LEV; // 退出函数
+          id = sym; // unwind symbol table locals
+          while (id[Tk]) {
+            if (id[Class] == Loc) { // 恢复Loc变量Class Type Val
+              id[Class] = id[HClass];
+              id[Type] = id[HType];
+              id[Val] = id[HVal];
+            }
+            id = id + Idsz;
+          }          
         }
       }
       else { // 全局变量
@@ -779,6 +842,21 @@ int main(int argc, char **argv)
       if (tk == ',') next();
     }
     next();
+  }
+
+  if (proto) {
+    proto_ptr = proto_metas;
+    while (proto_ptr->defined) {
+      printf("[%s]\n", proto_ptr->name);
+      pmp_cur = &proto_ptr->id_params;
+      while ((*pmp_cur)) {
+        printf("  [ty:%d IO:%s]\n", (*pmp_cur)->ty, (*pmp_cur)->io == Ro ? "IO_RO" : (*pmp_cur)->io == Wo ? "IO_WO" : (*pmp_cur)->io == Rw ? "IO_RW" : "N/A");
+        pmp_cur = &((*pmp_cur)->next);
+      }
+      printf("\n");
+      proto_ptr++;
+    }
+    return 0;
   }
 
   if (!(pc = (int *)idmain[Val])) { printf("main() not defined\n"); return -1; } // pc指针指向idman[Val] 也就是main在汇编中的地址
