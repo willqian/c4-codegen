@@ -26,7 +26,7 @@ int *e, *le,  // current position in emitted code
     loc,      // local variable offset
     line,     // current line number
     src,      // print source and assembly flag
-    debug;    // print executed instructions
+    debug,    // print executed instructions
     proto;    // proto code generate mode
 
 struct stt_meta_id {
@@ -48,15 +48,39 @@ struct stt_meta {
 struct proto_meta_param {
   int ty;
   int io;
+  int uniq_id;
   struct proto_meta_param *next;
+};
+
+struct proto_gen_cmd {
+  char *name;
+  int number;
+};
+
+struct proto_gen_transaction {
+  struct proto_meta_param *write;
+  char *write_name;
+  int write_name_size;
+  struct proto_meta_param *read;
+  char *read_name;
+  int read_name_size;
 };
 
 struct proto_meta {
   int *id;
   char *name;
+  int name_size;
   struct proto_meta_param *id_params;
   int defined;
+  struct proto_gen_cmd cmd;
+  struct proto_gen_transaction transaction;
 } *proto_metas;
+
+struct proto_context {
+  int id;
+  int number;
+  int uniq_id;
+} g_proto;
 
 // tokens and classes (operators last and in precedence order)
 // 结构体索引成员变量token . 和 -> 优先级最高
@@ -69,7 +93,7 @@ enum {
 // opcodes
 enum { LEA ,IMM ,JMP ,JSR ,BZ  ,BNZ ,ENT ,ADJ ,LEV ,LI  ,LC  ,SI  ,SC  ,PSH ,
        OR  ,XOR ,AND ,EQ  ,NE  ,LT  ,GT  ,LE  ,GE  ,SHL ,SHR ,ADD ,SUB ,MUL ,DIV ,MOD ,
-       OPEN,READ,CLOS,PRTF,MALC,FREE,MSET,MCMP,EXIT };
+       OPEN,READ,CLOS,PRTF,MALC,FREE,MSET,MCMP,MCPY,SLEN,EXIT };
 
 // types
 enum { CHAR, INT, STRUCT_BEGIN, PTR = 1024 }; // struct排列在INT后，最多定义到1023，后面是一级指针和二级指针
@@ -103,7 +127,7 @@ void next()
           // 例如 ENT 0
           printf("%8.4s", &"LEA ,IMM ,JMP ,JSR ,BZ  ,BNZ ,ENT ,ADJ ,LEV ,LI  ,LC  ,SI  ,SC  ,PSH ,"
                            "OR  ,XOR ,AND ,EQ  ,NE  ,LT  ,GT  ,LE  ,GE  ,SHL ,SHR ,ADD ,SUB ,MUL ,DIV ,MOD ,"
-                           "OPEN,READ,CLOS,PRTF,MALC,FREE,MSET,MCMP,EXIT,"[*++le * 5]);
+                           "OPEN,READ,CLOS,PRTF,MALC,FREE,MSET,MCMP,MCPY,SLEN,EXIT,"[*++le * 5]);
           // opcode小于等于ADJ的都是带一个参数，例如IMM 0  
           if (*le <= ADJ) printf(" %d\n", *++le); else printf("\n");
         }
@@ -568,7 +592,9 @@ int main(int argc, char **argv)
   struct proto_meta *proto_ptr;
   int protoindex;
   int *d;
-  struct proto_meta_param **pmp_cur;
+  struct proto_meta_param **pmp_cur, **trans_write_cur, **trans_read_cur;
+  int wo,ro;
+  char *str;
 
   --argc; ++argv;
   if (argc > 0 && **argv == '-' && (*argv)[1] == 's') { src = 1; --argc; ++argv; }
@@ -582,6 +608,9 @@ int main(int argc, char **argv)
   sttotal = PTR;
   stindex = STRUCT_BEGIN;
   protoindex = 0;
+  g_proto.id = 1;
+  g_proto.number = 0x1000;
+  g_proto.uniq_id = 1;
   if (!(sym = malloc(poolsz))) { printf("could not malloc(%d) symbol area\n", poolsz); return -1; }
   if (!(le = e = malloc(poolsz))) { printf("could not malloc(%d) text area\n", poolsz); return -1; }
   if (!(data = malloc(poolsz))) { printf("could not malloc(%d) data area\n", poolsz); return -1; }
@@ -597,7 +626,7 @@ int main(int argc, char **argv)
 
   // 先把这些特殊符号加到id table上，最后一个是main，程序从main开始运行
   p = "char else enum if int struct IO_RO IO_WO IO_RW return sizeof while "
-      "open read close printf malloc free memset memcmp exit void main";
+      "open read close printf malloc free memset memcmp memcpy exit void main";
   i = Char; while (i <= While) { next(); id[Tk] = i++; } // add keywords to symbol table
   i = OPEN; while (i <= EXIT) { next(); id[Class] = Sys; id[Type] = INT; id[Val] = i++; } // add library to symbol table
   next(); id[Tk] = Char; // handle void type
@@ -723,6 +752,7 @@ int main(int argc, char **argv)
             j++;
           }
           pproto->name[j] = '\0';
+          pproto->name_size = j + 1;
           // printf("proto [%s]\n", pproto->name);
           pmp_cur = &pproto->id_params;
         }
@@ -757,6 +787,7 @@ int main(int argc, char **argv)
           if (proto) {
             *pmp_cur = (struct proto_meta_param *)malloc(sizeof(struct proto_meta_param));
             (*pmp_cur)->ty = d[Type];
+            (*pmp_cur)->uniq_id = g_proto.uniq_id++;
             if (tk == Ro || tk == Wo || tk == Rw) {
               (*pmp_cur)->io = tk;
               next();
@@ -847,13 +878,87 @@ int main(int argc, char **argv)
   if (proto) {
     proto_ptr = proto_metas;
     while (proto_ptr->defined) {
+      printf("=======================================\n");
       printf("[%s]\n", proto_ptr->name);
       pmp_cur = &proto_ptr->id_params;
       while ((*pmp_cur)) {
-        printf("  [ty:%d IO:%s]\n", (*pmp_cur)->ty, (*pmp_cur)->io == Ro ? "IO_RO" : (*pmp_cur)->io == Wo ? "IO_WO" : (*pmp_cur)->io == Rw ? "IO_RW" : "N/A");
+        printf("  [ty:%d IO:%s]\n", (*pmp_cur)->ty, (*pmp_cur)->io == Ro ? "RO" : (*pmp_cur)->io == Wo ? "WO" : (*pmp_cur)->io == Rw ? "RW" : "N/A");
         pmp_cur = &((*pmp_cur)->next);
       }
       printf("\n");
+      // 1. 生成proto的cmd
+      j = 0;
+      proto_ptr->cmd.name = malloc(proto_ptr->name_size);
+      while (j < proto_ptr->name_size) {
+        if (proto_ptr->name[j] >= 'a' && proto_ptr->name[j] <= 'z') {
+          proto_ptr->cmd.name[j] = proto_ptr->name[j] - 32;
+        } else {
+          proto_ptr->cmd.name[j] = proto_ptr->name[j];
+        }
+        j++;
+      }
+      proto_ptr->cmd.number = g_proto.number++;
+      printf("#define %s 0x%x\n", proto_ptr->cmd.name, proto_ptr->cmd.number);
+      printf("\n");
+      // 2. 生成proto的RPC struct
+      trans_write_cur = &proto_ptr->transaction.write;
+      trans_read_cur = &proto_ptr->transaction.read;
+      pmp_cur = &proto_ptr->id_params;
+      while (*pmp_cur) {
+        wo = 0; ro = 0;
+        if ((*pmp_cur)->ty >= PTR) { // 指针类型才有读写方向
+          if ((*pmp_cur)->io == Wo) {
+            wo = 1;
+          } else if ((*pmp_cur)->io == Rw) {
+            wo = 1; ro = 1;
+          } else {
+            ro = 1;
+          }
+        } else {
+          ro = 1;
+        }
+        if (wo == 1) {
+          *trans_write_cur = (struct proto_meta_param *)malloc(sizeof(struct proto_meta_param));
+          (*trans_write_cur)->ty = (*pmp_cur)->ty;
+          (*trans_write_cur)->io = Wo;
+          (*trans_write_cur)->uniq_id = (*pmp_cur)->uniq_id;
+          trans_write_cur = &((*trans_write_cur)->next);
+        }
+        if (ro == 1) {
+          *trans_read_cur = (struct proto_meta_param *)malloc(sizeof(struct proto_meta_param));
+          (*trans_read_cur)->ty = (*pmp_cur)->ty;
+          (*trans_read_cur)->io = Ro;
+          (*trans_read_cur)->uniq_id = (*pmp_cur)->uniq_id;
+          trans_read_cur = &((*trans_read_cur)->next);
+        }
+        pmp_cur = &((*pmp_cur)->next);
+      }
+      str = "_trans_write_t";
+      proto_ptr->transaction.write_name_size = proto_ptr->name_size + strlen(str);
+      proto_ptr->transaction.write_name = malloc(proto_ptr->transaction.write_name_size);
+      memcpy(proto_ptr->transaction.write_name, proto_ptr->name, proto_ptr->name_size - 1);
+      memcpy(proto_ptr->transaction.write_name + proto_ptr->name_size - 1, str, strlen(str));
+      proto_ptr->transaction.write_name[proto_ptr->transaction.write_name_size - 1] = '\0';
+      str = "_trans_read_t";
+      proto_ptr->transaction.read_name_size = proto_ptr->name_size + strlen(str);
+      proto_ptr->transaction.read_name = malloc(proto_ptr->transaction.read_name_size);
+      memcpy(proto_ptr->transaction.read_name, proto_ptr->name, proto_ptr->name_size - 1);
+      memcpy(proto_ptr->transaction.read_name + proto_ptr->name_size - 1, str, strlen(str));
+      proto_ptr->transaction.read_name[proto_ptr->transaction.read_name_size - 1] = '\0';
+
+      pmp_cur = &proto_ptr->transaction.write;
+      if (*pmp_cur) {
+        printf("struct %s {\n", proto_ptr->transaction.write_name);
+        printf("};\n\n");
+      }
+      pmp_cur = &proto_ptr->transaction.read;
+      if (*pmp_cur) {
+        printf("struct %s {\n", proto_ptr->transaction.read_name);
+        printf("};\n");
+      }
+      // 3. 生成proto的RPC interface
+      printf("=======================================\n");
+      printf("\n\n");
       proto_ptr++;
     }
     return 0;
@@ -899,7 +1004,7 @@ int main(int argc, char **argv)
       printf("%d> %.4s", cycle,
         &"LEA ,IMM ,JMP ,JSR ,BZ  ,BNZ ,ENT ,ADJ ,LEV ,LI  ,LC  ,SI  ,SC  ,PSH ,"
          "OR  ,XOR ,AND ,EQ  ,NE  ,LT  ,GT  ,LE  ,GE  ,SHL ,SHR ,ADD ,SUB ,MUL ,DIV ,MOD ,"
-         "OPEN,READ,CLOS,PRTF,MALC,FREE,MSET,MCMP,EXIT,"[i * 5]);
+         "OPEN,READ,CLOS,PRTF,MALC,FREE,MSET,MCMP,MCPY,SLEN,EXIT,"[i * 5]);
       if (i <= ADJ) printf(" %d\n", *pc); else printf("\n");
     }
     if      (i == LEA) a = (int)(bp + *pc++);                             // load local address
@@ -953,6 +1058,8 @@ int main(int argc, char **argv)
     else if (i == FREE) free((void *)*sp);
     else if (i == MSET) a = (int)memset((char *)sp[2], sp[1], *sp);
     else if (i == MCMP) a = memcmp((char *)sp[2], (char *)sp[1], *sp);
+    else if (i == MCPY) a = memcpy((char *)sp[2], (char *)sp[1], *sp);
+    else if (i == SLEN) a = strlen((char *)*sp);
     else if (i == EXIT) { printf("exit(%d) cycle = %d\n", *sp, cycle); return *sp; }
     else { printf("unknown instruction = %d! cycle = %d\n", i, cycle); return -1; }
   }
