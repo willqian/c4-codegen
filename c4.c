@@ -626,7 +626,7 @@ int main(int argc, char **argv)
 
   // 先把这些特殊符号加到id table上，最后一个是main，程序从main开始运行
   p = "char else enum if int struct IO_RO IO_WO IO_RW return sizeof while "
-      "open read close printf malloc free memset memcmp memcpy exit void main";
+      "open read close printf malloc free memset memcmp memcpy strlen exit void main";
   i = Char; while (i <= While) { next(); id[Tk] = i++; } // add keywords to symbol table
   i = OPEN; while (i <= EXIT) { next(); id[Class] = Sys; id[Type] = INT; id[Val] = i++; } // add library to symbol table
   next(); id[Tk] = Char; // handle void type
