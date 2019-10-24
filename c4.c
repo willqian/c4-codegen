@@ -37,6 +37,8 @@ struct stt_meta_id {
   int id_offset;    // 结构体成员内存偏移
   int id_size;      // 结构体成员内存占用
   int id_type;      // 结构体成员type
+  char *name;       // 成员名字
+  int name_size;    // 成员名字长度
   struct stt_meta_id *next;
 };
 
@@ -81,6 +83,7 @@ struct proto_meta {
   int defined;
   struct proto_gen_cmd cmd;
   struct proto_gen_transaction transaction;
+  int proto_type;
 } *proto_metas;
 
 struct proto_context {
@@ -88,6 +91,10 @@ struct proto_context {
   int number;
   int uniq_id;
 } g_proto;
+
+enum {
+  INIT = 1, CLOSE, IO
+};
 
 // tokens and classes (operators last and in precedence order)
 // 结构体索引成员变量token . 和 -> 优先级最高
@@ -604,7 +611,8 @@ char *ty_to_name(int ty)
   } else if (bt == CHAR) {
     str = "char";
   } else {
-    str = stt_metas[bt].name;
+    snprintf(tbuf, tbsize, "struct %s", stt_metas[bt].name);
+    str = tbuf;
   }
 
   str_size = strlen(str) + 1 + mul_len + 1;
@@ -771,6 +779,10 @@ int main(int argc, char **argv)
             k = k + j;
             stm_id->id_size = j;
             stm_id->id_type = ty;
+            stm_id->name_size = id[NameLen] + 1;
+            stm_id->name = malloc(stm_id->name_size);
+            memset(stm_id->name, 0, stm_id->name_size);
+            memcpy(stm_id->name, id[Name], stm_id->name_size - 1);
             *cur = stm_id;
             cur = &((*cur)->next);
             stm->id_num++;
@@ -939,15 +951,36 @@ int main(int argc, char **argv)
 
   if (proto) {
     proto_ptr = proto_metas;
+    // 创建proto RPC 全局context
+    printf("#include \"proto.h\" \n\n");
+    printf("struct rpc_context {\n");
+    printf("  int handler;\n");
+    printf("  int index;\n");
+    printf("  int seq_id;\n");
+    printf("  int trans_id;\n");
+    printf("  char buffer[5120];\n");
+    printf("} g_context;\n\n");
+    printf("struct rpc_header {\n");
+    printf("  int start_frame;\n");
+    printf("  int len;\n");
+    printf("};\n\n");
+    printf("struct cmd_header {\n");
+    printf("  int cmd_id;\n");
+    printf("  int trans_id;\n");
+    printf("};\n\n");
+    printf("extern int rpc_init();\n");
+    printf("extern int rpc_send(int rpc_handler, char *buf, int size);\n");
+    printf("extern int rpc_recv(int rpc_handler, char *buf, int size);\n");
+    printf("\n");
+
     while (proto_ptr->defined) {
-      printf("=======================================\n");
-      printf("[%s]\n", proto_ptr->name);
+      //printf("[%s]\n", proto_ptr->name);
       pmp_cur = &proto_ptr->id_params;
       while ((*pmp_cur)) {
-        printf("  [ty:%d IO:%s]\n", (*pmp_cur)->ty, (*pmp_cur)->io == Ro ? "RO" : (*pmp_cur)->io == Wo ? "WO" : (*pmp_cur)->io == Rw ? "RW" : "N/A");
+        //printf("  [ty:%d IO:%s]\n", (*pmp_cur)->ty, (*pmp_cur)->io == Ro ? "RO" : (*pmp_cur)->io == Wo ? "WO" : (*pmp_cur)->io == Rw ? "RW" : "N/A");
         pmp_cur = &((*pmp_cur)->next);
       }
-      printf("\n");
+      //printf("\n");
       // 1. 生成proto的cmd
       j = 0;
       proto_ptr->cmd.name = malloc(proto_ptr->name_size);
@@ -960,6 +993,17 @@ int main(int argc, char **argv)
         j++;
       }
       proto_ptr->cmd.number = g_proto.number++;
+
+      proto_ptr->proto_type = IO;
+      k = strlen("init");
+      if (memcmp(proto_ptr->name + proto_ptr->name_size - k - 1, "init", k) == 0) {
+        proto_ptr->proto_type = INIT;
+      }
+      k = strlen("close");
+      if (memcmp(proto_ptr->name + proto_ptr->name_size - k - 1, "close", k) == 0) {
+        proto_ptr->proto_type = CLOSE;
+      }
+
       printf("#define %s 0x%x\n", proto_ptr->cmd.name, proto_ptr->cmd.number);
       printf("\n");
       // 2. 生成proto的RPC struct
@@ -1030,10 +1074,12 @@ int main(int argc, char **argv)
       memcpy(proto_ptr->transaction.rsp_name + proto_ptr->name_size - 1, str, strlen(str));
 
       pmp_cur = &proto_ptr->transaction.req;
-      if (*pmp_cur) {
+      if (*pmp_cur && (*pmp_cur)->next) {
+        pmp_cur = &((*pmp_cur)->next);
         printf("struct %s {\n", proto_ptr->transaction.req_name);
         while (*pmp_cur) {
-          str = ty_to_name((*pmp_cur)->ty);
+          k = (*pmp_cur)->ty >= PTR ? (*pmp_cur)->ty - PTR : (*pmp_cur)->ty;
+          str = ty_to_name(k);
           printf("  %s%s;\n", str, (*pmp_cur)->name);
           pmp_cur = &((*pmp_cur)->next);
         }
@@ -1043,14 +1089,170 @@ int main(int argc, char **argv)
       if (*pmp_cur) {
         printf("struct %s {\n", proto_ptr->transaction.rsp_name);
         while (*pmp_cur) {
-          str = ty_to_name((*pmp_cur)->ty);
+          k = (*pmp_cur)->ty >= PTR ? (*pmp_cur)->ty - PTR : (*pmp_cur)->ty;
+          str = ty_to_name(k);
           printf("  %s%s;\n", str, (*pmp_cur)->name);
           pmp_cur = &((*pmp_cur)->next);
         }
         printf("};\n");
       }
       // 3. 生成proto的RPC interface
-      printf("=======================================\n");
+      printf("\n%s%s(", ty_to_name(proto_ptr->id[Type]), proto_ptr->name);
+      pmp_cur = &proto_ptr->id_params;
+      while (*pmp_cur) {
+        str = ty_to_name((*pmp_cur)->ty);
+        printf("%s%s", str, (*pmp_cur)->name);
+        pmp_cur = &((*pmp_cur)->next);
+        if (*pmp_cur) {
+          printf(", ");
+        }
+      }
+      printf(")\n", ty_to_name(proto_ptr->id[Type]), proto_ptr->name);
+      printf("{\n");
+      if (proto_ptr->proto_type == INIT) {
+        printf("  g_context.handler = rpc_init();\n");
+        printf("  g_context.index = 1;\n");
+        printf("  g_context.seq_id = 1;\n");
+        printf("  g_context.trans_id = 1;\n");
+      } else {
+        printf("  if (%s != g_context.index) return -1;\n", proto_ptr->transaction.req->name);
+      }
+      printf("  int trans_id = g_context.trans_id++;\n");
+      printf("  %s_rpc_send(g_context.handler, trans_id", proto_ptr->name);
+      if (proto_ptr->transaction.req && proto_ptr->transaction.req->next) {
+        printf(", ");
+        pmp_cur = &(proto_ptr->transaction.req->next);
+        while (*pmp_cur) {
+          printf("%s", (*pmp_cur)->name);
+          pmp_cur = &((*pmp_cur)->next);
+          if (*pmp_cur) {
+            printf(", ");
+          }
+        }
+      }
+      printf(");\n");
+      printf("  int rsp_ret;\n");
+      printf("  %s_rpc_recv(g_context.handler, trans_id", proto_ptr->name);
+      if (proto_ptr->transaction.rsp && proto_ptr->transaction.rsp->next) {
+        printf(", ");
+        pmp_cur = &(proto_ptr->transaction.rsp);
+        while ((*pmp_cur)->next) {
+          printf("%s", (*pmp_cur)->name);
+          pmp_cur = &((*pmp_cur)->next);
+          if ((*pmp_cur)->next) {
+            printf(", ");
+          }
+        }
+      }
+      printf(", &rsp_ret);\n");
+      if (proto_ptr->proto_type == INIT) {
+        printf("  return rsp_ret == 0 ? g_context.index : -1;\n");
+      } else {
+        printf("  return rsp_ret;\n");
+      }
+      printf("}\n");
+      // 4. 生成proto RPC pack unpack
+      printf("\nint %s_rpc_send(int rcp_handler, int trans_id", proto_ptr->name);
+      if (proto_ptr->transaction.req && proto_ptr->transaction.req->next) {
+        printf(", ");
+        pmp_cur = &(proto_ptr->transaction.req->next);
+        while (*pmp_cur) {
+          printf("%s%s", ty_to_name((*pmp_cur)->ty), (*pmp_cur)->name);
+          pmp_cur = &((*pmp_cur)->next);
+          if (*pmp_cur) {
+            printf(", ");
+          }
+        }
+      }
+      printf(")\n");
+      printf("{\n");
+      printf("  struct rpc_header rheader;\n");
+      printf("  rheader.start_frame = 0x8A8A;\n");
+      printf("  struct cmd_header cheader;\n");
+      printf("  cheader.cmd_id = %s;\n", proto_ptr->cmd.name);
+      printf("  cheader.trans_id = trans_id;\n");
+      if (proto_ptr->transaction.req && proto_ptr->transaction.req->next) {
+        printf("  struct %s msg;\n", proto_ptr->transaction.req_name);
+        pmp_cur = &(proto_ptr->transaction.req->next);
+        while (*pmp_cur) {
+          if ((*pmp_cur)->ty >= STRUCT_BEGIN + PTR && (*pmp_cur)->ty < 2 * PTR) {
+            stm_id = stt_metas[(*pmp_cur)->ty - PTR].ids;
+            while (stm_id) {
+              printf("  msg.%s.%s = %s->%s;\n", (*pmp_cur)->name, stm_id->name, (*pmp_cur)->name, stm_id->name); 
+              stm_id = stm_id->next;
+            }
+          } else {
+            printf("  msg.%s = %s;\n", (*pmp_cur)->name, (*pmp_cur)->name);
+          }
+          pmp_cur = &((*pmp_cur)->next);
+        }
+      }
+      if (proto_ptr->transaction.req && proto_ptr->transaction.req->next) {
+        printf("  rheader.len = sizeof(cheader) + sizeof(msg);\n");
+      } else {
+        printf("  rheader.len = sizeof(cheader);\n");
+      }
+      printf("  memcpy(g_context.buffer, &rheader, sizeof(rheader));\n");
+      printf("  memcpy(g_context.buffer + sizeof(rheader), &cheader, sizeof(cheader));\n");
+      if (proto_ptr->transaction.req && proto_ptr->transaction.req->next) {
+        printf("  memcpy(g_context.buffer + sizeof(rheader) + sizeof(cheader), &cheader, sizeof(msg));\n");
+      }
+      printf("  int ret = rpc_send(rcp_handler, g_context.buffer, rheader.len + sizeof(rheader));\n");
+      printf("  return ret;\n");
+      printf("}\n");
+
+      printf("\nint %s_rpc_recv(int rcp_handler, int trans_id", proto_ptr->name);
+      if (proto_ptr->transaction.rsp) {
+        printf(", ");
+        pmp_cur = &(proto_ptr->transaction.rsp);
+        while (*pmp_cur) {
+          if ((*pmp_cur)->next) {
+            printf("%s%s", ty_to_name((*pmp_cur)->ty), (*pmp_cur)->name);
+          } else {
+            printf("%s*%s", ty_to_name((*pmp_cur)->ty), (*pmp_cur)->name);
+          }
+          pmp_cur = &((*pmp_cur)->next);
+          if (*pmp_cur) {
+            printf(", ");
+          }
+        }
+      }
+      printf(")\n");
+      printf("{\n");
+      printf("  // hint to receive the corresponding packet\n");
+      printf("  struct rpc_header rheader;\n");
+      printf("  rheader.start_frame = 0x8A8A;\n");
+      printf("  struct cmd_header cheader;\n");
+      printf("  cheader.cmd_id = %s;\n", proto_ptr->cmd.name);
+      printf("  cheader.trans_id = trans_id;\n");
+      if (proto_ptr->transaction.rsp) {
+        printf("  struct %s msg;\n", proto_ptr->transaction.rsp_name);
+      }
+      if (proto_ptr->transaction.req && proto_ptr->transaction.req->next) {
+        printf("  rheader.len = sizeof(cheader) + sizeof(msg);\n");
+      } else {
+        printf("  rheader.len = sizeof(cheader);\n");
+      }
+      printf("  memcpy(g_context.buffer, &rheader, sizeof(rheader));\n");
+      printf("  memcpy(g_context.buffer + sizeof(rheader), &cheader, sizeof(cheader));\n");
+      printf("  int ret = rpc_recv(rcp_handler, g_context.buffer, rheader.len + sizeof(rheader));\n");
+      printf("  memcpy(&msg, g_context.buffer +  sizeof(rheader) + sizeof(cheader), sizeof(msg));\n");
+
+      pmp_cur = &(proto_ptr->transaction.rsp);
+      while (*pmp_cur) {
+        if ((*pmp_cur)->ty >= STRUCT_BEGIN + PTR && (*pmp_cur)->ty < 2 * PTR) {
+          stm_id = stt_metas[(*pmp_cur)->ty - PTR].ids;
+          while (stm_id) {
+            printf("  %s->%s = msg.%s.%s;\n", (*pmp_cur)->name, stm_id->name, (*pmp_cur)->name, stm_id->name); 
+            stm_id = stm_id->next;
+          }
+        } else {
+          printf("  *%s = msg.%s;\n", (*pmp_cur)->name, (*pmp_cur)->name);
+        }
+        pmp_cur = &((*pmp_cur)->next);
+      }
+      printf("  return ret;\n");
+      printf("}\n");
       printf("\n\n");
       proto_ptr++;
     }
