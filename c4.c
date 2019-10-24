@@ -17,6 +17,9 @@
 char *p, *lp, // current position in source code
      *data;   // data/bss pointer
 
+char *tbuf;   // tmp buffer
+int tbsize;   // tmp buffer size
+
 int *e, *le,  // current position in emitted code
     *id,      // currently parsed identifier
     *sym,     // symbol table (simple list of identifiers)
@@ -42,6 +45,8 @@ struct stt_meta {
   struct stt_meta_id *ids;
   int id_num;       // 结构体成员个数
   int size;         // 结构体总内存占用
+  char *name;       // 结构体名字
+  int name_size;    // 结构体名字长度
   int defined;      // 结构体是否定义过
 } *stt_metas; // 结构体元数据数组
 
@@ -49,6 +54,8 @@ struct proto_meta_param {
   int ty;
   int io;
   int uniq_id;
+  char *name;
+  int name_size;
   struct proto_meta_param *next;
 };
 
@@ -58,12 +65,12 @@ struct proto_gen_cmd {
 };
 
 struct proto_gen_transaction {
-  struct proto_meta_param *write;
-  char *write_name;
-  int write_name_size;
-  struct proto_meta_param *read;
-  char *read_name;
-  int read_name_size;
+  struct proto_meta_param *req;
+  char *req_name;
+  int req_name_size;
+  struct proto_meta_param *rsp;
+  char *rsp_name;
+  int rsp_name_size;
 };
 
 struct proto_meta {
@@ -93,7 +100,7 @@ enum {
 // opcodes
 enum { LEA ,IMM ,JMP ,JSR ,BZ  ,BNZ ,ENT ,ADJ ,LEV ,LI  ,LC  ,SI  ,SC  ,PSH ,
        OR  ,XOR ,AND ,EQ  ,NE  ,LT  ,GT  ,LE  ,GE  ,SHL ,SHR ,ADD ,SUB ,MUL ,DIV ,MOD ,
-       OPEN,READ,CLOS,PRTF,MALC,FREE,MSET,MCMP,MCPY,SLEN,EXIT };
+       OPEN,READ,CLOS,PRTF,SPRT,MALC,FREE,MSET,MCMP,MCPY,SLEN,EXIT };
 
 // types
 enum { CHAR, INT, STRUCT_BEGIN, PTR = 1024 }; // struct排列在INT后，最多定义到1023，后面是一级指针和二级指针
@@ -127,7 +134,7 @@ void next()
           // 例如 ENT 0
           printf("%8.4s", &"LEA ,IMM ,JMP ,JSR ,BZ  ,BNZ ,ENT ,ADJ ,LEV ,LI  ,LC  ,SI  ,SC  ,PSH ,"
                            "OR  ,XOR ,AND ,EQ  ,NE  ,LT  ,GT  ,LE  ,GE  ,SHL ,SHR ,ADD ,SUB ,MUL ,DIV ,MOD ,"
-                           "OPEN,READ,CLOS,PRTF,MALC,FREE,MSET,MCMP,MCPY,SLEN,EXIT,"[*++le * 5]);
+                           "OPEN,READ,CLOS,PRTF,SPRT,MALC,FREE,MSET,MCMP,MCPY,SLEN,EXIT,"[*++le * 5]);
           // opcode小于等于ADJ的都是带一个参数，例如IMM 0  
           if (*le <= ADJ) printf(" %d\n", *++le); else printf("\n");
         }
@@ -147,8 +154,10 @@ void next()
         if (tk == id[Hash] && !memcmp((char *)id[Name], pp, p - pp)) { tk = id[Tk]; return; }
         id = id + Idsz;
       }
-      id[Name] = (int)pp; // pp存的是字符串基地址
       id[NameLen] = p - pp;
+      id[Name] = malloc(p - pp + 1);
+      memset(id[Name], 0, id[NameLen] + 1);
+      memcpy(id[Name], pp, id[NameLen]);
       id[Hash] = tk;
       tk = id[Tk] = Id;
       return;
@@ -578,6 +587,47 @@ void stmt() // 不支持for循环
   }
 }
 
+char *ty_to_name(int ty)
+{
+  int i;
+  int mul_len;
+  int bt;
+  char *str;
+  int str_size;
+  char *name;
+  int index;
+  
+  mul_len = ty / PTR;
+  bt = ty % PTR;
+  if (bt == INT) {
+    str = "int";
+  } else if (bt == CHAR) {
+    str = "char";
+  } else {
+    str = stt_metas[bt].name;
+  }
+
+  str_size = strlen(str) + 1 + mul_len + 1;
+  
+  name = malloc(str_size);
+  memset(name, 0, str_size);
+  memcpy(name, str, strlen(str));
+  index = strlen(str);
+  if (mul_len != 0) {
+    name[strlen(str)] = ' ';
+    index++;
+  }
+  i = 0;
+  while (i < mul_len) {
+    name[strlen(str) + 1 + i] = '*';
+    i++;
+  }
+  if (mul_len == 0) {
+    name[str_size - 2] = ' ';
+  }
+  return name;
+}
+
 int main(int argc, char **argv)
 {
   int fd, bt, mem_bt, ty, poolsz, *idmain;
@@ -592,9 +642,9 @@ int main(int argc, char **argv)
   struct proto_meta *proto_ptr;
   int protoindex;
   int *d;
-  struct proto_meta_param **pmp_cur, **trans_write_cur, **trans_read_cur;
+  struct proto_meta_param **pmp_cur, **trans_req_cur, **trans_rsp_cur;
   int wo,ro;
-  char *str;
+  char *str, *str1;
 
   --argc; ++argv;
   if (argc > 0 && **argv == '-' && (*argv)[1] == 's') { src = 1; --argc; ++argv; }
@@ -611,22 +661,26 @@ int main(int argc, char **argv)
   g_proto.id = 1;
   g_proto.number = 0x1000;
   g_proto.uniq_id = 1;
+  tbsize = poolsz; 
+  
   if (!(sym = malloc(poolsz))) { printf("could not malloc(%d) symbol area\n", poolsz); return -1; }
   if (!(le = e = malloc(poolsz))) { printf("could not malloc(%d) text area\n", poolsz); return -1; }
   if (!(data = malloc(poolsz))) { printf("could not malloc(%d) data area\n", poolsz); return -1; }
   if (!(sp = malloc(poolsz))) { printf("could not malloc(%d) stack area\n", poolsz); return -1; }
   if (!(stt_metas = malloc(sttotal * sizeof(struct stt_meta)))) { printf("could not malloc struct meta area\n"); return -1; }
   if (!(proto_metas = malloc(sttotal * sizeof(struct proto_meta)))) { printf("could not malloc proto area\n"); return -1; }
+  if (!(tbuf = malloc(tbsize))) { printf("could not malloc(%d) tmp buffer area\n", tbsize); return -1; }
 
   memset(sym,  0, poolsz);
   memset(e,    0, poolsz);
   memset(data, 0, poolsz);
   memset(stt_metas,  0, sttotal * sizeof(struct stt_meta));
   memset(proto_metas,  0, sttotal * sizeof(struct proto_meta));
+  memset(tbuf, 0, tbsize);
 
   // 先把这些特殊符号加到id table上，最后一个是main，程序从main开始运行
   p = "char else enum if int struct IO_RO IO_WO IO_RW return sizeof while "
-      "open read close printf malloc free memset memcmp memcpy strlen exit void main";
+      "open read close printf snprintf malloc free memset memcmp memcpy strlen exit void main";
   i = Char; while (i <= While) { next(); id[Tk] = i++; } // add keywords to symbol table
   i = OPEN; while (i <= EXIT) { next(); id[Class] = Sys; id[Type] = INT; id[Val] = i++; } // add library to symbol table
   next(); id[Tk] = Char; // handle void type
@@ -674,6 +728,10 @@ int main(int argc, char **argv)
         if (stt_metas[id[STMetaType]].defined != 0) { printf("%d: struct redefined\n", line); return -1; }
         id[STMetaType] = stindex;
         stm = &stt_metas[stindex]; // 获取当前结构体meta
+        stm->name_size = id[NameLen] + 1;
+        stm->name = malloc(stm->name_size);
+        memset(stm->name, 0, stm->name_size);
+        memcpy(stm->name, id[Name], stm->name_size - 1);
         bt = stindex;
         stindex++;
         k = 0; // 成员变量offset
@@ -788,6 +846,10 @@ int main(int argc, char **argv)
             *pmp_cur = (struct proto_meta_param *)malloc(sizeof(struct proto_meta_param));
             (*pmp_cur)->ty = d[Type];
             (*pmp_cur)->uniq_id = g_proto.uniq_id++;
+            (*pmp_cur)->name_size = d[NameLen] + 1;
+            (*pmp_cur)->name = malloc((*pmp_cur)->name_size);
+            memset((*pmp_cur)->name, 0, (*pmp_cur)->name_size);
+            memcpy((*pmp_cur)->name, d[Name], (*pmp_cur)->name_size - 1);
             if (tk == Ro || tk == Wo || tk == Rw) {
               (*pmp_cur)->io = tk;
               next();
@@ -901,8 +963,8 @@ int main(int argc, char **argv)
       printf("#define %s 0x%x\n", proto_ptr->cmd.name, proto_ptr->cmd.number);
       printf("\n");
       // 2. 生成proto的RPC struct
-      trans_write_cur = &proto_ptr->transaction.write;
-      trans_read_cur = &proto_ptr->transaction.read;
+      trans_req_cur = &proto_ptr->transaction.req;
+      trans_rsp_cur = &proto_ptr->transaction.rsp;
       pmp_cur = &proto_ptr->id_params;
       while (*pmp_cur) {
         wo = 0; ro = 0;
@@ -918,42 +980,73 @@ int main(int argc, char **argv)
           ro = 1;
         }
         if (wo == 1) {
-          *trans_write_cur = (struct proto_meta_param *)malloc(sizeof(struct proto_meta_param));
-          (*trans_write_cur)->ty = (*pmp_cur)->ty;
-          (*trans_write_cur)->io = Wo;
-          (*trans_write_cur)->uniq_id = (*pmp_cur)->uniq_id;
-          trans_write_cur = &((*trans_write_cur)->next);
+          *trans_req_cur = (struct proto_meta_param *)malloc(sizeof(struct proto_meta_param));
+          (*trans_req_cur)->ty = (*pmp_cur)->ty;
+          (*trans_req_cur)->io = Wo;
+          (*trans_req_cur)->uniq_id = (*pmp_cur)->uniq_id;
+          (*trans_req_cur)->name_size = (*pmp_cur)->name_size;
+          (*trans_req_cur)->name = malloc((*trans_req_cur)->name_size);
+          memset((*trans_req_cur)->name, 0, (*trans_req_cur)->name_size);
+          memcpy((*trans_req_cur)->name, (*pmp_cur)->name, (*pmp_cur)->name_size - 1);
+          trans_req_cur = &((*trans_req_cur)->next);
         }
         if (ro == 1) {
-          *trans_read_cur = (struct proto_meta_param *)malloc(sizeof(struct proto_meta_param));
-          (*trans_read_cur)->ty = (*pmp_cur)->ty;
-          (*trans_read_cur)->io = Ro;
-          (*trans_read_cur)->uniq_id = (*pmp_cur)->uniq_id;
-          trans_read_cur = &((*trans_read_cur)->next);
+          *trans_rsp_cur = (struct proto_meta_param *)malloc(sizeof(struct proto_meta_param));
+          (*trans_rsp_cur)->ty = (*pmp_cur)->ty;
+          (*trans_rsp_cur)->io = Ro;
+          (*trans_rsp_cur)->uniq_id = (*pmp_cur)->uniq_id;
+          (*trans_rsp_cur)->name_size = (*pmp_cur)->name_size;
+          (*trans_rsp_cur)->name = malloc((*trans_rsp_cur)->name_size);
+          memset((*trans_rsp_cur)->name, 0, (*trans_rsp_cur)->name_size);
+          memcpy((*trans_rsp_cur)->name, (*pmp_cur)->name, (*pmp_cur)->name_size - 1);
+          trans_rsp_cur = &((*trans_rsp_cur)->next);
         }
         pmp_cur = &((*pmp_cur)->next);
       }
-      str = "_trans_write_t";
-      proto_ptr->transaction.write_name_size = proto_ptr->name_size + strlen(str);
-      proto_ptr->transaction.write_name = malloc(proto_ptr->transaction.write_name_size);
-      memcpy(proto_ptr->transaction.write_name, proto_ptr->name, proto_ptr->name_size - 1);
-      memcpy(proto_ptr->transaction.write_name + proto_ptr->name_size - 1, str, strlen(str));
-      proto_ptr->transaction.write_name[proto_ptr->transaction.write_name_size - 1] = '\0';
-      str = "_trans_read_t";
-      proto_ptr->transaction.read_name_size = proto_ptr->name_size + strlen(str);
-      proto_ptr->transaction.read_name = malloc(proto_ptr->transaction.read_name_size);
-      memcpy(proto_ptr->transaction.read_name, proto_ptr->name, proto_ptr->name_size - 1);
-      memcpy(proto_ptr->transaction.read_name + proto_ptr->name_size - 1, str, strlen(str));
-      proto_ptr->transaction.read_name[proto_ptr->transaction.read_name_size - 1] = '\0';
+      printf("===> 2\n");
+      // 添加一个rsp的返回值
+      *trans_rsp_cur = (struct proto_meta_param *)malloc(sizeof(struct proto_meta_param));
+      (*trans_rsp_cur)->ty = INT;
+      (*trans_rsp_cur)->io = Ro;
+      (*trans_rsp_cur)->uniq_id = g_proto.uniq_id++;
+      (*trans_rsp_cur)->name_size = strlen("rsp_ret") + 1;
+      (*trans_rsp_cur)->name = malloc((*trans_rsp_cur)->name_size);
+      memset((*trans_rsp_cur)->name, 0, (*trans_rsp_cur)->name_size);
+      memcpy((*trans_rsp_cur)->name, "rsp_ret", strlen("rsp_ret"));
+      trans_rsp_cur = &((*trans_rsp_cur)->next);
+      
+      // 结构体名称
+      str = "_trans_req_t";
+      proto_ptr->transaction.req_name_size = proto_ptr->name_size + strlen(str);
+      proto_ptr->transaction.req_name = malloc(proto_ptr->transaction.req_name_size);
+      memset(proto_ptr->transaction.req_name, 0, proto_ptr->transaction.req_name_size);
+      memcpy(proto_ptr->transaction.req_name, proto_ptr->name, proto_ptr->name_size - 1);
+      memcpy(proto_ptr->transaction.req_name + proto_ptr->name_size - 1, str, strlen(str));
+      str = "_trans_rsp_t";
+      proto_ptr->transaction.rsp_name_size = proto_ptr->name_size + strlen(str);
+      proto_ptr->transaction.rsp_name = malloc(proto_ptr->transaction.rsp_name_size);
+      memset(proto_ptr->transaction.rsp_name, 0, proto_ptr->transaction.rsp_name_size);
+      memcpy(proto_ptr->transaction.rsp_name, proto_ptr->name, proto_ptr->name_size - 1);
+      memcpy(proto_ptr->transaction.rsp_name + proto_ptr->name_size - 1, str, strlen(str));
 
-      pmp_cur = &proto_ptr->transaction.write;
+      pmp_cur = &proto_ptr->transaction.req;
       if (*pmp_cur) {
-        printf("struct %s {\n", proto_ptr->transaction.write_name);
+        printf("struct %s {\n", proto_ptr->transaction.req_name);
+        while (*pmp_cur) {
+          str = ty_to_name((*pmp_cur)->ty);
+          printf("  %s%s;\n", str, (*pmp_cur)->name);
+          pmp_cur = &((*pmp_cur)->next);
+        }
         printf("};\n\n");
       }
-      pmp_cur = &proto_ptr->transaction.read;
+      pmp_cur = &proto_ptr->transaction.rsp;
       if (*pmp_cur) {
-        printf("struct %s {\n", proto_ptr->transaction.read_name);
+        printf("struct %s {\n", proto_ptr->transaction.rsp_name);
+        while (*pmp_cur) {
+          str = ty_to_name((*pmp_cur)->ty);
+          printf("  %s%s;\n", str, (*pmp_cur)->name);
+          pmp_cur = &((*pmp_cur)->next);
+        }
         printf("};\n");
       }
       // 3. 生成proto的RPC interface
@@ -1004,7 +1097,7 @@ int main(int argc, char **argv)
       printf("%d> %.4s", cycle,
         &"LEA ,IMM ,JMP ,JSR ,BZ  ,BNZ ,ENT ,ADJ ,LEV ,LI  ,LC  ,SI  ,SC  ,PSH ,"
          "OR  ,XOR ,AND ,EQ  ,NE  ,LT  ,GT  ,LE  ,GE  ,SHL ,SHR ,ADD ,SUB ,MUL ,DIV ,MOD ,"
-         "OPEN,READ,CLOS,PRTF,MALC,FREE,MSET,MCMP,MCPY,SLEN,EXIT,"[i * 5]);
+         "OPEN,READ,CLOS,PRTF,SPRT,MALC,FREE,MSET,MCMP,MCPY,SLEN,EXIT,"[i * 5]);
       if (i <= ADJ) printf(" %d\n", *pc); else printf("\n");
     }
     if      (i == LEA) a = (int)(bp + *pc++);                             // load local address
@@ -1054,6 +1147,7 @@ int main(int argc, char **argv)
     // sp + 2 得到的是第一个参数往上的栈地址，然后以此为基准来按顺序取参数
     // 这里实际上引用了一些空参数，但由于printf自己做了处理所有没有关系
     else if (i == PRTF) { t = sp + pc[1]; a = printf((char *)t[-1], t[-2], t[-3], t[-4], t[-5], t[-6]); }
+    else if (i == SPRT) { t = sp + pc[1]; a = snprintf((char *)t[-1], t[-2], (char *)t[-3], t[-4], t[-5], t[-6], t[-7], t[-8]); }
     else if (i == MALC) a = (int)malloc(*sp);
     else if (i == FREE) free((void *)*sp);
     else if (i == MSET) a = (int)memset((char *)sp[2], sp[1], *sp);
