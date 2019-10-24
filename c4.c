@@ -1152,7 +1152,7 @@ int main(int argc, char **argv)
       }
       printf("}\n");
       // 4. 生成proto RPC pack unpack
-      printf("\nint %s_rpc_send(int rcp_handler, int trans_id", proto_ptr->name);
+      printf("\nint %s_rpc_send(int rpc_handler, int trans_id", proto_ptr->name);
       if (proto_ptr->transaction.req && proto_ptr->transaction.req->next) {
         printf(", ");
         pmp_cur = &(proto_ptr->transaction.req->next);
@@ -1197,11 +1197,11 @@ int main(int argc, char **argv)
       if (proto_ptr->transaction.req && proto_ptr->transaction.req->next) {
         printf("  memcpy(g_context.buffer + sizeof(rheader) + sizeof(cheader), &cheader, sizeof(msg));\n");
       }
-      printf("  int ret = rpc_send(rcp_handler, g_context.buffer, rheader.len + sizeof(rheader));\n");
+      printf("  int ret = rpc_send(rpc_handler, g_context.buffer, rheader.len + sizeof(rheader));\n");
       printf("  return ret;\n");
       printf("}\n");
 
-      printf("\nint %s_rpc_recv(int rcp_handler, int trans_id", proto_ptr->name);
+      printf("\nint %s_rpc_recv(int rpc_handler, int trans_id", proto_ptr->name);
       if (proto_ptr->transaction.rsp) {
         printf(", ");
         pmp_cur = &(proto_ptr->transaction.rsp);
@@ -1235,7 +1235,7 @@ int main(int argc, char **argv)
       }
       printf("  memcpy(g_context.buffer, &rheader, sizeof(rheader));\n");
       printf("  memcpy(g_context.buffer + sizeof(rheader), &cheader, sizeof(cheader));\n");
-      printf("  int ret = rpc_recv(rcp_handler, g_context.buffer, rheader.len + sizeof(rheader));\n");
+      printf("  int ret = rpc_recv(rpc_handler, g_context.buffer, rheader.len + sizeof(rheader));\n");
       printf("  memcpy(&msg, g_context.buffer +  sizeof(rheader) + sizeof(cheader), sizeof(msg));\n");
 
       pmp_cur = &(proto_ptr->transaction.rsp);
