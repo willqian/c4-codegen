@@ -1228,7 +1228,7 @@ int main(int argc, char **argv)
       if (proto_ptr->transaction.rsp) {
         printf("  struct %s msg;\n", proto_ptr->transaction.rsp_name);
       }
-      if (proto_ptr->transaction.req && proto_ptr->transaction.req->next) {
+      if (proto_ptr->transaction.rsp && proto_ptr->transaction.rsp->next) {
         printf("  rheader.len = sizeof(cheader) + sizeof(msg);\n");
       } else {
         printf("  rheader.len = sizeof(cheader);\n");
