@@ -969,15 +969,15 @@ int main(int argc, char **argv)
       while (*pmp_cur) {
         wo = 0; ro = 0;
         if ((*pmp_cur)->ty >= PTR) { // 指针类型才有读写方向
-          if ((*pmp_cur)->io == Wo) {
-            wo = 1;
+          if ((*pmp_cur)->io == Ro) {
+            ro = 1;
           } else if ((*pmp_cur)->io == Rw) {
             wo = 1; ro = 1;
           } else {
-            ro = 1;
+            wo = 1;
           }
         } else {
-          ro = 1;
+          wo = 1;
         }
         if (wo == 1) {
           *trans_req_cur = (struct proto_meta_param *)malloc(sizeof(struct proto_meta_param));
@@ -1003,7 +1003,7 @@ int main(int argc, char **argv)
         }
         pmp_cur = &((*pmp_cur)->next);
       }
-      printf("===> 2\n");
+
       // 添加一个rsp的返回值
       *trans_rsp_cur = (struct proto_meta_param *)malloc(sizeof(struct proto_meta_param));
       (*trans_rsp_cur)->ty = INT;
