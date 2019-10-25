@@ -1256,6 +1256,52 @@ int main(int argc, char **argv)
       printf("\n\n");
       proto_ptr++;
     }
+
+    // 生成proto RPC server callback定义
+    proto_ptr = proto_metas;
+    while (proto_ptr->defined) {
+      printf("%son_%s(", ty_to_name(proto_ptr->id[Type]), proto_ptr->name);
+      pmp_cur = &proto_ptr->id_params;
+      while (*pmp_cur) {
+        str = ty_to_name((*pmp_cur)->ty);
+        printf("%s%s", str, (*pmp_cur)->name);
+        pmp_cur = &((*pmp_cur)->next);
+        if (*pmp_cur) {
+          printf(", ");
+        }
+      }
+      printf(");\n");
+      proto_ptr++;
+    }
+    printf("\n");
+    // 生成proto RPC server dispatcher
+    printf("int on_dispacher(int rpc_handler, char *buf, int size)\n");
+    printf("{\n");
+    printf("}\n\n");
+    // 声明 RPC server extern
+    printf("typedef int (*on_server_recv)(int rpc_handler, char *buf, int size);\n");
+    printf("extern int rpc_server_init(on_server_recv on_recv);\n");
+    printf("extern int rpc_server_send(int rpc_handler, char *buf, int size);\n");
+    printf("\n");
+    // 生成proto RPC server interface
+    proto_ptr = proto_metas;
+    while (proto_ptr->defined) {
+      printf("%son_%s(", ty_to_name(proto_ptr->id[Type]), proto_ptr->name);
+      pmp_cur = &proto_ptr->id_params;
+      while (*pmp_cur) {
+        str = ty_to_name((*pmp_cur)->ty);
+        printf("%s%s", str, (*pmp_cur)->name);
+        pmp_cur = &((*pmp_cur)->next);
+        if (*pmp_cur) {
+          printf(", ");
+        }
+      }
+      printf(")\n", ty_to_name(proto_ptr->id[Type]), proto_ptr->name);
+      printf("{\n");
+      printf("}\n\n");
+      // 生成proto RPC server pack unpack
+      proto_ptr++;
+    }
     return 0;
   }
 
