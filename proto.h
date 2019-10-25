@@ -11,7 +11,7 @@ struct member {
 
 int module_init();
 
-int module_set(int handler, struct member *param IO_WO);
+int module_set(int handler, struct member *param IO_WO, int *flag);
 
 int module_get(int handler, struct member *param IO_RO, int *flag IO_RO);
 

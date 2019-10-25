@@ -1018,6 +1018,7 @@ int main(int argc, char **argv)
           } else if ((*pmp_cur)->io == Rw) {
             wo = 1; ro = 1;
           } else {
+            (*pmp_cur)->io = Wo;
             wo = 1;
           }
         } else {
@@ -1079,7 +1080,7 @@ int main(int argc, char **argv)
         pmp_cur = &((*pmp_cur)->next);
         printf("struct %s {\n", proto_ptr->transaction.req_name);
         while (*pmp_cur) {
-          k = (*pmp_cur)->ty >= PTR ? (*pmp_cur)->ty - PTR : (*pmp_cur)->ty;
+          k = ((*pmp_cur)->ty >= STRUCT_BEGIN + PTR && (*pmp_cur)->ty < 2 * PTR) ? (*pmp_cur)->ty - PTR : (*pmp_cur)->ty;
           str = ty_to_name(k);
           printf("  %s%s;\n", str, (*pmp_cur)->name);
           pmp_cur = &((*pmp_cur)->next);
@@ -1090,7 +1091,7 @@ int main(int argc, char **argv)
       if (*pmp_cur) {
         printf("struct %s {\n", proto_ptr->transaction.rsp_name);
         while (*pmp_cur) {
-          k = (*pmp_cur)->ty >= PTR ? (*pmp_cur)->ty - PTR : (*pmp_cur)->ty;
+          k = ((*pmp_cur)->ty >= STRUCT_BEGIN + PTR && (*pmp_cur)->ty < 2 * PTR) ? (*pmp_cur)->ty - PTR : (*pmp_cur)->ty;
           str = ty_to_name(k);
           printf("  %s%s;\n", str, (*pmp_cur)->name);
           pmp_cur = &((*pmp_cur)->next);
@@ -1372,7 +1373,7 @@ int main(int argc, char **argv)
       printf("{\n");
       printf("  // write your module code\n");
       printf("  return 0;\n");
-      printf("}\n\n");
+      printf("}\n");
       // 生成proto RPC server pack unpack
       proto_ptr++;
     }
