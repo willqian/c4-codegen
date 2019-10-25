@@ -1376,6 +1376,9 @@ int main(int argc, char **argv)
       printf("}\n");
       // 生成proto RPC server pack unpack
       proto_ptr++;
+      if (proto_ptr->defined) {
+        printf("\n");
+      }
     }
     return 0;
   }
