@@ -1021,6 +1021,7 @@ int main(int argc, char **argv)
             wo = 1;
           }
         } else {
+          (*pmp_cur)->io = Wo;
           wo = 1;
         }
         if (wo == 1) {
@@ -1258,31 +1259,102 @@ int main(int argc, char **argv)
     }
 
     // 生成proto RPC server callback定义
+    printf("// RPC server\n");
     proto_ptr = proto_metas;
     while (proto_ptr->defined) {
-      printf("%son_%s(", ty_to_name(proto_ptr->id[Type]), proto_ptr->name);
-      pmp_cur = &proto_ptr->id_params;
-      while (*pmp_cur) {
-        str = ty_to_name((*pmp_cur)->ty);
-        printf("%s%s", str, (*pmp_cur)->name);
-        pmp_cur = &((*pmp_cur)->next);
-        if (*pmp_cur) {
-          printf(", ");
+      printf("extern %son_%s(", ty_to_name(proto_ptr->id[Type]), proto_ptr->name);
+      if (proto_ptr->id_params) {
+        pmp_cur = &proto_ptr->id_params;
+        while (*pmp_cur) {
+          str = ty_to_name((*pmp_cur)->ty);
+          printf("%s%s", str, (*pmp_cur)->name);
+          pmp_cur = &((*pmp_cur)->next);
+          if (*pmp_cur) {
+            printf(", ");
+          }
         }
       }
       printf(");\n");
       proto_ptr++;
     }
     printf("\n");
-    // 生成proto RPC server dispatcher
-    printf("int on_dispacher(int rpc_handler, char *buf, int size)\n");
-    printf("{\n");
-    printf("}\n\n");
     // 声明 RPC server extern
     printf("typedef int (*on_server_recv)(int rpc_handler, char *buf, int size);\n");
     printf("extern int rpc_server_init(on_server_recv on_recv);\n");
     printf("extern int rpc_server_send(int rpc_handler, char *buf, int size);\n");
     printf("\n");
+    // 生成proto RPC server dispatcher
+    printf("int on_dispacher(int rpc_handler, char *buf, int size)\n");
+    printf("{\n");
+    printf("  struct rpc_header rheader;\n");
+    printf("  struct cmd_header cheader;\n");
+    printf("  memcpy(&rheader, buf, sizeof(rheader));\n");
+    printf("  if (rheader.start_frame != 0x8A8A) return -1;\n");
+    printf("  memcpy(&cheader, buf + sizeof(rheader), sizeof(cheader));\n");
+    printf("  switch (cheader.cmd_id) {\n");
+    proto_ptr = proto_metas;
+    while (proto_ptr->defined) {
+      printf("    case %s: {\n", proto_ptr->cmd.name);
+      if (proto_ptr->transaction.req && proto_ptr->transaction.req->next) {
+        printf("      struct %s req_msg;\n", proto_ptr->transaction.req_name);
+        printf("      memcpy(&req_msg, buf + sizeof(rheader) + sizeof(cheader), sizeof(req_msg));\n");
+      }
+      if (proto_ptr->transaction.rsp && proto_ptr->transaction.rsp->next) {
+        printf("      struct %s rsp_msg;\n", proto_ptr->transaction.rsp_name);
+      }
+      pmp_cur = &(proto_ptr->transaction.rsp);
+      while (*pmp_cur && (*pmp_cur)->next) {
+        if ((*pmp_cur)->io == Rw) {
+          if ((*pmp_cur)->ty >= STRUCT_BEGIN + PTR && (*pmp_cur)->ty < 2 * PTR) {
+            stm_id = stt_metas[(*pmp_cur)->ty - PTR].ids;
+            while (stm_id) {
+              printf("      rsp_msg.%s.%s = req_msg.%s.%s;\n", (*pmp_cur)->name, stm_id->name, (*pmp_cur)->name, stm_id->name); 
+              stm_id = stm_id->next;
+            }
+          } else {
+            printf("      rsp_msg.%s = req_msg.%s;\n", (*pmp_cur)->name, (*pmp_cur)->name);
+          }
+        }
+        pmp_cur = &((*pmp_cur)->next);
+      }
+      printf("      int ret = on_%s(rpc_handler", proto_ptr->name);
+      if (proto_ptr->id_params && proto_ptr->id_params->next) {
+        printf(", ");
+        pmp_cur = &(proto_ptr->id_params->next);
+        while (*pmp_cur) {
+          if ((*pmp_cur)->io == Wo) {
+            if ((*pmp_cur)->ty >= STRUCT_BEGIN + PTR && (*pmp_cur)->ty < 2 * PTR) {
+              printf("&req_msg.%s", (*pmp_cur)->name);
+            } else {
+              printf("req_msg.%s", (*pmp_cur)->name);
+            }
+          } else {
+            printf("&rsp_msg.%s", (*pmp_cur)->name);
+          }
+          pmp_cur = &((*pmp_cur)->next);
+          if (*pmp_cur) {
+            printf(", ");
+          }
+        }
+      }
+      printf(");\n");
+      printf("      memcpy(g_context.buffer, &rheader, sizeof(rheader));\n");
+      printf("      memcpy(g_context.buffer + sizeof(rheader), &cheader, sizeof(cheader));\n");
+      if (proto_ptr->transaction.rsp && proto_ptr->transaction.rsp->next) {
+        printf("      memcpy(g_context.buffer +  sizeof(rheader) + sizeof(cheader), &rsp_msg, sizeof(rsp_msg));\n");
+        printf("      return rpc_server_send(rpc_handler, g_context.buffer, sizeof(rheader) + sizeof(cheader) + sizeof(rsp_msg));\n");
+      } else {
+        printf("      return rpc_server_send(rpc_handler, g_context.buffer, sizeof(rheader) + sizeof(cheader));\n");
+      }
+      printf("      break;\n");
+      printf("    }\n", proto_ptr->cmd.name);
+      proto_ptr++;
+    }
+    printf("    default:\n");
+    printf("      break;\n");
+    printf("  }\n");
+    printf("  return 0;\n");
+    printf("}\n\n");
     // 生成proto RPC server interface
     proto_ptr = proto_metas;
     while (proto_ptr->defined) {
@@ -1298,6 +1370,8 @@ int main(int argc, char **argv)
       }
       printf(")\n", ty_to_name(proto_ptr->id[Type]), proto_ptr->name);
       printf("{\n");
+      printf("  // write your module code\n");
+      printf("  return 0;\n");
       printf("}\n\n");
       // 生成proto RPC server pack unpack
       proto_ptr++;

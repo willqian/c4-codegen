@@ -9,14 +9,14 @@ struct member {
     int c;
 };
 
-int test_rpc_init();
+int module_init();
 
-int test_rpc_set(int handler, struct member *param IO_WO);
+int module_set(int handler, struct member *param IO_WO);
 
-int test_rpc_get(int handler, struct member *param IO_RO);
+int module_get(int handler, struct member *param IO_RO, int *flag IO_RO);
 
-int test_rpc_update(int handler, struct member *param IO_RW);
+int module_update(int handler, struct member *param IO_RW, int flag);
 
-int test_rpc_close(int handler);
+int module_close(int handler);
 
 #endif /* PROTO_H */
