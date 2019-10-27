@@ -100,7 +100,8 @@ enum {
 // 结构体索引成员变量token . 和 -> 优先级最高
 enum {
   Num = 128, Fun, Proto, Sys, Glo, Loc, Id,
-  Char, Else, Enum, If, Int, Struct, Ro, Wo, Rw, Return, Sizeof, While,
+  Char, Else, Enum, If, Int, Int8, Uint8, Int16, Uint16, Int32, Uint32, Int64, Uint64, Float, Double,
+  Struct, Ro, Wo, Rw, Return, Sizeof, While,
   Assign, Cond, Lor, Lan, Or, Xor, And, Eq, Ne, Lt, Gt, Le, Ge, Shl, Shr, Add, Sub, Mul, Div, Mod, Inc, Dec, Brak, Dot, Arrow,
 };
 
@@ -110,7 +111,8 @@ enum { LEA ,IMM ,JMP ,JSR ,BZ  ,BNZ ,ENT ,ADJ ,LEV ,LI  ,LC  ,SI  ,SC  ,PSH ,
        OPEN,READ,CLOS,PRTF,SPRT,MALC,FREE,MSET,MCMP,MCPY,SLEN,EXIT };
 
 // types
-enum { CHAR, INT, STRUCT_BEGIN, PTR = 1024 }; // struct排列在INT后，最多定义到1023，后面是一级指针和二级指针
+// struct排列在基本类型后，最多定义到1023，后面是一级指针和二级指针
+enum { CHAR, INT, INT8, UINT8, INT16, UINT16, INT32, UINT32, INT64, UINT64, FLOAT, DOUBLE, STRUCT_BEGIN, PTR = 1024 };
 
 // identifier offsets (since we can't create an ident struct)
 // 这个数据结构本身定义symbol，这里我们也复用为结构体定义的symbol
@@ -687,7 +689,7 @@ int main(int argc, char **argv)
   memset(tbuf, 0, tbsize);
 
   // 先把这些特殊符号加到id table上，最后一个是main，程序从main开始运行
-  p = "char else enum if int struct IO_RO IO_WO IO_RW return sizeof while "
+  p = "char else enum if int int8_t uint8_t int16_t uint16_t int32_t uint32_t int64_t uint64_t float double struct IO_RO IO_WO IO_RW return sizeof while "
       "open read close printf snprintf malloc free memset memcmp memcpy strlen exit void main";
   i = Char; while (i <= While) { next(); id[Tk] = i++; } // add keywords to symbol table
   i = OPEN; while (i <= EXIT) { next(); id[Class] = Sys; id[Type] = INT; id[Val] = i++; } // add library to symbol table
