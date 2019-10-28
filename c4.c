@@ -14,6 +14,10 @@
 #include <fcntl.h>
 #define int long long // 兼容64位系统
 
+// TODO: 栈局部变量布局内存优化
+// 针对不同长度的数据类型，对其在栈上的布局进行优化，优化内存的占用
+// 参考gcc x64的做法，小的变量存在低地址（栈顶），大的变量存在高地址，并8字节对齐
+
 char *p, *lp, // current position in source code
      *data;   // data/bss pointer
 
